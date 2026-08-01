@@ -16,6 +16,7 @@ type AppConfig struct {
 
 type ChatModelConfig struct {
 	Provider  string                         `yaml:"provider"`
+	Defaults  ModelProviderConfig            `yaml:"defaults"`
 	Providers map[string]ModelProviderConfig `yaml:"providers"`
 }
 
@@ -65,10 +66,48 @@ func (c *AppConfig) GetChatProviderConfig(provider string) (ModelProviderConfig,
 		return ModelProviderConfig{}, fmt.Errorf("chat_model.provider is required")
 	}
 
-	cfg, ok := c.ChatModel.Providers[selected]
+	providerCfg, ok := c.ChatModel.Providers[selected]
 	if !ok {
 		return ModelProviderConfig{}, fmt.Errorf("chat model provider %q not found", selected)
 	}
 
-	return cfg, nil
+	return mergeProviderConfig(c.ChatModel.Defaults, providerCfg), nil
+}
+
+func mergeProviderConfig(defaults, provider ModelProviderConfig) ModelProviderConfig {
+	merged := defaults
+	if provider.APIKey != "" {
+		merged.APIKey = provider.APIKey
+	}
+	if provider.BaseURL != "" {
+		merged.BaseURL = provider.BaseURL
+	}
+	if provider.Model != "" {
+		merged.Model = provider.Model
+	}
+	if provider.Timeout != 0 {
+		merged.Timeout = provider.Timeout
+	}
+	if provider.APIVersion != "" {
+		merged.APIVersion = provider.APIVersion
+	}
+	if provider.MaxTokens != 0 {
+		merged.MaxTokens = provider.MaxTokens
+	}
+	if provider.Temperature != 0 {
+		merged.Temperature = provider.Temperature
+	}
+
+	merged.CustomHeader = make(map[string]string, len(defaults.CustomHeader)+len(provider.CustomHeader))
+	for key, value := range defaults.CustomHeader {
+		merged.CustomHeader[key] = value
+	}
+	for key, value := range provider.CustomHeader {
+		merged.CustomHeader[key] = value
+	}
+	if len(merged.CustomHeader) == 0 {
+		merged.CustomHeader = nil
+	}
+
+	return merged
 }

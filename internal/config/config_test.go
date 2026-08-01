@@ -13,14 +13,24 @@ func TestLoad(t *testing.T) {
 
 	content := `chat_model:
   provider: anthropic
+  defaults:
+    timeout: 30s
+    max_tokens: 2048
+    temperature: 0.7
+    custom_header:
+      X-Common: common
   providers:
     anthropic:
       api_key: test-key
       base_url: https://claude.example.com
       model: claude-sonnet
-      timeout: 45s
-      max_tokens: 2048
       temperature: 0.3
+    openai:
+      base_url: https://openai.example.com
+      model: gpt-5.4
+      timeout: 45s
+      custom_header:
+        X-Provider: provider
 work_permit_api:
   base_url: http://127.0.0.1:8083
   site_id: 28
@@ -48,9 +58,33 @@ work_permit_api:
 	if provider.BaseURL != "https://claude.example.com" {
 		t.Fatalf("BaseURL = %s", provider.BaseURL)
 	}
-	if provider.Timeout != 45*time.Second {
+	if provider.Timeout != 30*time.Second {
 		t.Fatalf("Timeout = %s", provider.Timeout)
 	}
+	if provider.MaxTokens != 2048 {
+		t.Fatalf("MaxTokens = %d", provider.MaxTokens)
+	}
+	if provider.Temperature != 0.3 {
+		t.Fatalf("Temperature = %f", provider.Temperature)
+	}
+	if provider.CustomHeader["X-Common"] != "common" {
+		t.Fatalf("Common header = %s", provider.CustomHeader["X-Common"])
+	}
+
+	overridden, err := cfg.GetChatProviderConfig("openai")
+	if err != nil {
+		t.Fatalf("GetChatProviderConfig(openai) error = %v", err)
+	}
+	if overridden.Timeout != 45*time.Second {
+		t.Fatalf("Overridden Timeout = %s", overridden.Timeout)
+	}
+	if overridden.Temperature != 0.7 {
+		t.Fatalf("Inherited Temperature = %f", overridden.Temperature)
+	}
+	if overridden.CustomHeader["X-Common"] != "common" || overridden.CustomHeader["X-Provider"] != "provider" {
+		t.Fatalf("Merged headers = %#v", overridden.CustomHeader)
+	}
+
 	if cfg.WorkPermitAPI.BaseURL != "http://127.0.0.1:8083" {
 		t.Fatalf("WorkPermitAPI.BaseURL = %s", cfg.WorkPermitAPI.BaseURL)
 	}
