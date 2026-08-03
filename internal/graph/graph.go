@@ -2,7 +2,10 @@ package graph
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
+	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 )
 
@@ -34,20 +37,82 @@ type WpCompanyInfo struct {
 	Name string
 }
 
+type WpMetaInfo struct {
+	Id           int    `json:"id"`
+	TemplateName string `json:"templetname"`
+	WpTypeName   string `json:"wptypename"`
+	ProcessType  int    `json:"processtype"`
+	WpTypeId     int    `json:"wptypeid"`
+}
+
 type WpTemplate struct {
-	ID      int
-	Name    string
-	Content interface{}
+	ID                   int
+	WpTypeID             int
+	WpTypeName           string
+	Name                 string
+	IsDefault            bool
+	IDPrefix             string
+	UpdatedBy            string
+	UpdateTime           int64
+	Version              int
+	State                int
+	SiteIDs              string
+	HandwrittenSignature int
+	ApplyContent         string
+	ApplyContentObject   map[string]any
 }
 
 type FilledWp struct {
-	TemplateID int
-	Name       string
-	Content    interface{}
+	TemplateID     int
+	Name           string
+	Content        interface{}
+	FilledFields   []FilledField
+	UnfilledFields []UnfilledField
+}
+
+type FilledField struct {
+	Name   string
+	Value  any
+	Source string
+}
+
+type UnfilledField struct {
+	Name string
+}
+
+type WpInfoExtraction struct {
+	AreaName       string
+	StartTime      string
+	EndTime        string
+	Description    string
+	EquipmentNames []string
+	CompanyName    string
+}
+
+type WpInfoExtractor interface {
+	Extract(ctx context.Context, input string) (WpInfoExtraction, error)
+}
+
+type WpTypeRecognizer interface {
+	Recognize(ctx context.Context, description string, templates []WpMetaInfo) ([]int, error)
+}
+
+type StructuredMemoryEntry struct {
+	WpTypeID   int
+	AreaID     int
+	FieldName  string
+	FieldValue any
+	Source     string
+	UpdatedAt  int64
+}
+
+type StructuredMemoryStore interface {
+	Lookup(ctx context.Context, wpTypeID, areaID int) ([]StructuredMemoryEntry, error)
 }
 
 type WpGraphState struct {
 	CurrentNode      string
+	UserInput        string
 	SiteID           int
 	UserID           int
 	Area             AreaInfo
@@ -56,7 +121,7 @@ type WpGraphState struct {
 	Description      string
 	Equipments       []EquipmentInfo
 	WpCompany        WpCompanyInfo
-	IntentWpTypes    []string
+	IntentWpTypes    []WpMetaInfo
 	WpTemplates      []WpTemplate
 	FilledWps        []FilledWp
 	ValidationStatus string
@@ -64,38 +129,89 @@ type WpGraphState struct {
 	RetryCount       int
 }
 
-// LeaveGraphState keeps compatibility with the existing type name in this package.
-type LeaveGraphState = WpGraphState
+func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
+		if extractor == nil {
+			return nil, fmt.Errorf("wp info extractor is nil")
+		}
 
-func askWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
-	// TODO: Extract or ask for work area, start/end time, description, equipment, and company.
-	state.CurrentNode = nodeAskWpInfo
-	return state, nil
+		state.CurrentNode = nodeAskWpInfo
+		if strings.TrimSpace(state.UserInput) == "" {
+			return state, nil
+		}
+
+		extracted, err := extractor.Extract(ctx, state.UserInput)
+		if err != nil {
+			return nil, fmt.Errorf("extract work permit info: %w", err)
+		}
+
+		state.Area.Name = strings.TrimSpace(extracted.AreaName)
+		state.StartTime = strings.TrimSpace(extracted.StartTime)
+		state.EndTime = strings.TrimSpace(extracted.EndTime)
+		state.Description = strings.TrimSpace(extracted.Description)
+		state.Equipments = mapEquipmentNames(extracted.EquipmentNames)
+		state.WpCompany.Name = strings.TrimSpace(extracted.CompanyName)
+		return state, nil
+	}
 }
 
 func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
-	// TODO: Validate that required work permit base information is complete and normalized.
 	state.CurrentNode = nodeValidateWpInfo
+	missingFields := make([]string, 0, 6)
+	if strings.TrimSpace(state.Area.Name) == "" {
+		missingFields = append(missingFields, "area")
+	}
+	if strings.TrimSpace(state.StartTime) == "" {
+		missingFields = append(missingFields, "start time")
+	}
+	if strings.TrimSpace(state.EndTime) == "" {
+		missingFields = append(missingFields, "end time")
+	}
+	if strings.TrimSpace(state.Description) == "" {
+		missingFields = append(missingFields, "description")
+	}
+	if len(missingFields) > 0 {
+		state.ValidationStatus = validationInvalid
+		state.ErrorMsg = fmt.Sprintf("missing required work permit info: %s", strings.Join(missingFields, ", "))
+		return state, nil
+	}
+
 	state.ValidationStatus = validationValid
+	state.ErrorMsg = ""
 	return state, nil
 }
 
-func intentRecognitionNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
-	// TODO: Recognize required work permit types from the work description.
-	state.CurrentNode = nodeIntentRecognition
-	return state, nil
-}
+func newIntentRecognitionNode(templateTool einotool.InvokableTool, recognizer WpTypeRecognizer) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
+		if templateTool == nil {
+			return nil, fmt.Errorf("work permit template tool is nil")
+		}
+		if recognizer == nil {
+			return nil, fmt.Errorf("work permit type recognizer is nil")
+		}
 
-func searchWpTemplateNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
-	// TODO: Query matched work permit templates by recognized permit types and site context.
-	state.CurrentNode = nodeSearchWpTemplate
-	return state, nil
-}
+		raw, err := templateTool.InvokableRun(ctx, fmt.Sprintf(`{"siteid":%d}`, state.SiteID))
+		if err != nil {
+			return nil, fmt.Errorf("query work permit templates: %w", err)
+		}
 
-func fillWpsNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
-	// TODO: Fill each selected work permit template, using parallel execution if needed.
-	state.CurrentNode = nodeFillWps
-	return state, nil
+		templates, err := decodeWpMetaInfoResponse(raw)
+		if err != nil {
+			return nil, fmt.Errorf("decode work permit templates: %w", err)
+		}
+
+		selectedIDs, err := recognizer.Recognize(ctx, state.Description, templates)
+		if err != nil {
+			return nil, fmt.Errorf("recognize work permit types: %w", err)
+		}
+
+		state.IntentWpTypes, err = selectWpMetaInfos(templates, selectedIDs)
+		if err != nil {
+			return nil, err
+		}
+		state.CurrentNode = nodeIntentRecognition
+		return state, nil
+	}
 }
 
 func validateFilledWpsNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
@@ -125,15 +241,43 @@ func routeAfterFilledWpsValidation(ctx context.Context, state *WpGraphState) (st
 	return nodeFillWps, nil
 }
 
+func mapEquipmentNames(names []string) []EquipmentInfo {
+	equipments := make([]EquipmentInfo, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		equipments = append(equipments, EquipmentInfo{Name: name})
+	}
+	return equipments
+}
+
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph() (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+	if extractor == nil {
+		return nil, fmt.Errorf("wp info extractor is nil")
+	}
+	if templateTool == nil {
+		return nil, fmt.Errorf("work permit template tool is nil")
+	}
+	if recognizer == nil {
+		return nil, fmt.Errorf("work permit type recognizer is nil")
+	}
+	if templateDetailTool == nil {
+		return nil, fmt.Errorf("work permit template detail tool is nil")
+	}
+	if memoryStore == nil {
+		return nil, fmt.Errorf("structured memory store is nil")
+	}
+
 	graph := compose.NewGraph[*WpGraphState, *WpGraphState]()
 
-	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(askWpInfoNode))
+	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(newAskWpInfoNode(extractor)))
 	graph.AddLambdaNode(nodeValidateWpInfo, compose.InvokableLambda(validateWpInfoNode))
-	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(intentRecognitionNode))
-	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(searchWpTemplateNode))
-	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(fillWpsNode))
+	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, recognizer)))
+	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
+	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(memoryStore)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))
 	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(submitWpsNode))
 
@@ -162,8 +306,8 @@ func BuildWpGraph() (compose.Runnable[*WpGraphState, *WpGraphState], error) {
 }
 
 // BuildLeaveGraph keeps compatibility with callers that still use the old leave graph name.
-func BuildLeaveGraph() (compose.Runnable[*WpGraphState, *WpGraphState], error) {
-	return BuildWpGraph()
+func BuildLeaveGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+	return BuildWpGraph(extractor, templateTool, recognizer, templateDetailTool, memoryStore)
 }
 
 /* 智能填充作业票的 Graph 结构
@@ -176,7 +320,7 @@ START
   `-- invalid -> askWpInfo (重新询问)
   -> intentRecognition (根据作业描述，判断需要哪些作业票)
   -> searchWpTemplate (查询作业票模板)
-  -> fillWps (填充作业票，可并行实现)
+  -> fillWps (填充作业票，可并行填充)
   -> validateFilledWps (验证填充后的作业票信息是否完整)
   |-- valid -> submitWps
   `-- invalid -> fillWps (重新填充)
