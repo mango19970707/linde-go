@@ -3,6 +3,7 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	einotool "github.com/cloudwego/eino/components/tool"
@@ -98,7 +99,7 @@ func TestValidateWpInfoNodeRejectsMissingFields(t *testing.T) {
 func TestBuildWpGraphRequiresExtractor(t *testing.T) {
 	t.Parallel()
 
-	if _, err := BuildWpGraph(nil, nil, nil, nil, nil); err == nil {
+	if _, err := BuildWpGraph(nil, nil, nil, nil, nil, nil, nil); err == nil {
 		t.Fatalf("BuildWpGraph(nil) error = nil")
 	}
 }
@@ -371,5 +372,114 @@ func TestFillWpsNodeRejectsMalformedTemplate(t *testing.T) {
 
 	if _, err := node(context.Background(), state); err == nil {
 		t.Fatalf("newFillWpsNode() error = nil")
+	}
+}
+
+type recordingUpdateWpInfoTool struct {
+	payloads []map[string]any
+	ids      []int
+}
+
+func (s *recordingUpdateWpInfoTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return nil, nil
+}
+
+func (s *recordingUpdateWpInfoTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...einotool.Option) (string, error) {
+	var input struct {
+		Payload map[string]any `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
+		return "", err
+	}
+	s.payloads = append(s.payloads, input.Payload)
+	id := 90001
+	if len(s.ids) > 0 {
+		id = s.ids[0]
+		s.ids = s.ids[1:]
+	}
+	return fmt.Sprintf(`{"success":true,"data":%d}`, id), nil
+}
+
+type recordingLinkWpInfoTool struct {
+	links []map[string]int
+}
+
+func (s *recordingLinkWpInfoTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return nil, nil
+}
+
+func (s *recordingLinkWpInfoTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...einotool.Option) (string, error) {
+	var input struct {
+		ID  int `json:"id"`
+		FID int `json:"fid"`
+	}
+	if err := json.Unmarshal([]byte(argumentsInJSON), &input); err != nil {
+		return "", err
+	}
+	s.links = append(s.links, map[string]int{"id": input.ID, "fid": input.FID})
+	return `{"success":true,"data":true}`, nil
+}
+
+func TestSubmitWpsNodeSubmitsApprovedFullPayloads(t *testing.T) {
+	t.Parallel()
+
+	updateTool := &recordingUpdateWpInfoTool{}
+	linkTool := &recordingLinkWpInfoTool{}
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, 23, SubmitWpsApproval{
+		Approved: true,
+		Payloads: []map[string]any{{"id": 0, "wptempletid": 243, "wptypeid": 23}},
+	})
+	if err != nil {
+		t.Fatalf("submitApprovedWps() error = %v", err)
+	}
+	if len(updateTool.payloads) != 1 || updateTool.payloads[0]["wptempletid"] != float64(243) && updateTool.payloads[0]["wptempletid"] != 243 {
+		t.Fatalf("payloads = %#v", updateTool.payloads)
+	}
+	if len(linkTool.links) != 0 {
+		t.Fatalf("links = %#v", linkTool.links)
+	}
+}
+
+func TestSubmitWpsNodeLinksChildrenToPermitParent(t *testing.T) {
+	t.Parallel()
+
+	updateTool := &recordingUpdateWpInfoTool{ids: []int{91001, 91002, 91003}}
+	linkTool := &recordingLinkWpInfoTool{}
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, 23, SubmitWpsApproval{
+		Approved: true,
+		Payloads: []map[string]any{
+			{"id": 0, "wptempletid": 243, "wptypeid": 23},
+			{"id": 0, "wptempletid": 171, "wptypeid": 1},
+			{"id": 0, "wptempletid": 180, "wptypeid": 9},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submitApprovedWps() error = %v", err)
+	}
+	if len(linkTool.links) != 2 {
+		t.Fatalf("len(links) = %d", len(linkTool.links))
+	}
+	if linkTool.links[0]["fid"] != 91001 || linkTool.links[0]["id"] != 91002 {
+		t.Fatalf("links[0] = %#v", linkTool.links[0])
+	}
+	if linkTool.links[1]["fid"] != 91001 || linkTool.links[1]["id"] != 91003 {
+		t.Fatalf("links[1] = %#v", linkTool.links[1])
+	}
+}
+
+func TestSubmitWpsNodeInterruptsBeforeSubmission(t *testing.T) {
+	t.Parallel()
+
+	node := newSubmitWpsNode(&recordingUpdateWpInfoTool{}, &recordingLinkWpInfoTool{})
+	state := &WpGraphState{
+		FilledWps: []FilledWp{{TemplateID: 243, Name: "作业许可证", Content: map[string]any{"wptypeid": 23}}},
+	}
+
+	_, err := node(context.Background(), state)
+	if err == nil {
+		t.Fatalf("newSubmitWpsNode() error = nil")
+	}
+	if err == nil {
+		t.Fatalf("expected interrupt error")
 	}
 }

@@ -110,6 +110,11 @@ type StructuredMemoryStore interface {
 	Lookup(ctx context.Context, wpTypeID, areaID int) ([]StructuredMemoryEntry, error)
 }
 
+type SubmitWpsApproval struct {
+	Approved bool             `json:"approved"`
+	Payloads []map[string]any `json:"payloads"`
+}
+
 type WpGraphState struct {
 	CurrentNode      string
 	UserInput        string
@@ -221,12 +226,6 @@ func validateFilledWpsNode(ctx context.Context, state *WpGraphState) (*WpGraphSt
 	return state, nil
 }
 
-func submitWpsNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
-	// TODO: Submit generated work permits to the downstream API.
-	state.CurrentNode = nodeSubmitWps
-	return state, nil
-}
-
 func routeAfterWpInfoValidation(ctx context.Context, state *WpGraphState) (string, error) {
 	if state.ValidationStatus == validationValid {
 		return nodeIntentRecognition, nil
@@ -254,7 +253,7 @@ func mapEquipmentNames(names []string) []EquipmentInfo {
 }
 
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
 	if extractor == nil {
 		return nil, fmt.Errorf("wp info extractor is nil")
 	}
@@ -270,6 +269,12 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	if memoryStore == nil {
 		return nil, fmt.Errorf("structured memory store is nil")
 	}
+	if updateWpInfoTool == nil {
+		return nil, fmt.Errorf("update work permit tool is nil")
+	}
+	if linkWpInfoTool == nil {
+		return nil, fmt.Errorf("link work permit tool is nil")
+	}
 
 	graph := compose.NewGraph[*WpGraphState, *WpGraphState]()
 
@@ -279,7 +284,7 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
 	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(memoryStore)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))
-	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(submitWpsNode))
+	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(newSubmitWpsNode(updateWpInfoTool, linkWpInfoTool)))
 
 	graph.AddEdge(compose.START, nodeAskWpInfo)
 	graph.AddEdge(nodeAskWpInfo, nodeValidateWpInfo)
@@ -303,11 +308,6 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	graph.AddEdge(nodeSubmitWps, compose.END)
 
 	return graph.Compile(context.Background(), compose.WithMaxRunSteps(20))
-}
-
-// BuildLeaveGraph keeps compatibility with callers that still use the old leave graph name.
-func BuildLeaveGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
-	return BuildWpGraph(extractor, templateTool, recognizer, templateDetailTool, memoryStore)
 }
 
 /* 智能填充作业票的 Graph 结构
