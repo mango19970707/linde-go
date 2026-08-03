@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -18,9 +18,18 @@ import (
 )
 
 func main() {
+	initLogger()
+
 	if err := run(); err != nil {
-		log.Fatal(err)
+		slog.Error("server_exit", slog.String("err", err.Error()))
+		os.Exit(1)
 	}
+}
+
+func initLogger() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})))
 }
 
 func run() error {
@@ -95,6 +104,6 @@ func run() error {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	log.Printf("work permit API listening on %s", httpServer.Addr)
+	slog.Info("server_listen", slog.String("addr", httpServer.Addr))
 	return httpServer.ListenAndServe()
 }

@@ -104,6 +104,7 @@ func (s *WorkPermitServer) handleInitialRequest(c *gin.Context, request workPerm
 	}
 
 	state := &graph.WpGraphState{
+		SessionID: sessionID,
 		UserInput: request.Input,
 		SiteID:    s.siteID,
 		UserID:    s.userID,
@@ -147,6 +148,7 @@ func (s *WorkPermitServer) handleResumeRequest(c *gin.Context, request workPermi
 
 	resumeContext := compose.ResumeWithData(c.Request.Context(), session.InterruptID, resumeData)
 	state := &graph.WpGraphState{
+		SessionID: request.SessionID,
 		UserInput: request.Input,
 		SiteID:    s.siteID,
 		UserID:    s.userID,

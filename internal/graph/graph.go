@@ -3,8 +3,11 @@ package graph
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
+	"github.com/cloudwego/eino/callbacks"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
@@ -121,6 +124,7 @@ type WpInfoSupplement struct {
 }
 
 type WpGraphState struct {
+	SessionID        string
 	CurrentNode      string
 	UserInput        string
 	SiteID           int
@@ -352,7 +356,15 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	graph.AddEdge(nodeSubmitWps, compose.END)
 
 	graphOptions = append(graphOptions, compose.WithMaxRunSteps(20))
-	return graph.Compile(context.Background(), graphOptions...)
+	runnable, err := graph.Compile(context.Background(), graphOptions...)
+	if err != nil {
+		return nil, err
+	}
+
+	return &traceableWpGraphRunnable{
+		inner:   runnable,
+		handler: newWpGraphTraceHandler(),
+	}, nil
 }
 
 /*
@@ -390,4 +402,112 @@ func buildWpInfoQuestion(missingFields []string) string {
 		}
 	}
 	return fmt.Sprintf("请补充%s", strings.Join(parts, "、"))
+}
+
+type traceableWpGraphRunnable struct {
+	inner   compose.Runnable[*WpGraphState, *WpGraphState]
+	handler callbacks.Handler
+}
+
+func (r *traceableWpGraphRunnable) Invoke(ctx context.Context, input *WpGraphState, opts ...compose.Option) (*WpGraphState, error) {
+	if r.handler != nil {
+		opts = append(opts, compose.WithCallbacks(r.handler))
+	}
+	return r.inner.Invoke(ctx, input, opts...)
+}
+
+func (r *traceableWpGraphRunnable) Stream(ctx context.Context, input *WpGraphState, opts ...compose.Option) (*schema.StreamReader[*WpGraphState], error) {
+	if r.handler != nil {
+		opts = append(opts, compose.WithCallbacks(r.handler))
+	}
+	return r.inner.Stream(ctx, input, opts...)
+}
+
+func (r *traceableWpGraphRunnable) Collect(ctx context.Context, input *schema.StreamReader[*WpGraphState], opts ...compose.Option) (*WpGraphState, error) {
+	if r.handler != nil {
+		opts = append(opts, compose.WithCallbacks(r.handler))
+	}
+	return r.inner.Collect(ctx, input, opts...)
+}
+
+func (r *traceableWpGraphRunnable) Transform(ctx context.Context, input *schema.StreamReader[*WpGraphState], opts ...compose.Option) (*schema.StreamReader[*WpGraphState], error) {
+	if r.handler != nil {
+		opts = append(opts, compose.WithCallbacks(r.handler))
+	}
+	return r.inner.Transform(ctx, input, opts...)
+}
+
+type wpTraceKey struct{}
+
+type wpTraceMeta struct {
+	traceID string
+	startAt time.Time
+}
+
+func newWpGraphTraceHandler() callbacks.Handler {
+	return callbacks.NewHandlerBuilder().
+		OnStartFn(func(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
+			meta := wpTraceMeta{
+				traceID: extractTraceID(input),
+				startAt: time.Now(),
+			}
+			if info != nil && info.Name != "" {
+				slog.Info("wp_graph_start",
+					slog.String("trace", meta.traceID),
+					slog.String("node", info.Name),
+				)
+			}
+			return context.WithValue(ctx, wpTraceKey{}, meta)
+		}).
+		OnEndFn(func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
+			meta, _ := ctx.Value(wpTraceKey{}).(wpTraceMeta)
+			if info != nil && info.Name != "" {
+				slog.Info("wp_graph_end",
+					slog.String("trace", fallbackTraceID(meta.traceID)),
+					slog.String("node", info.Name),
+					slog.Int64("ms", time.Since(meta.startAt).Milliseconds()),
+				)
+			}
+			return ctx
+		}).
+		OnErrorFn(func(ctx context.Context, info *callbacks.RunInfo, err error) context.Context {
+			meta, _ := ctx.Value(wpTraceKey{}).(wpTraceMeta)
+			nodeName := ""
+			if info != nil {
+				nodeName = info.Name
+			}
+			slog.Error("wp_graph_error",
+				slog.String("trace", fallbackTraceID(meta.traceID)),
+				slog.String("node", nodeName),
+				slog.String("err", compactTraceError(err)),
+			)
+			return ctx
+		}).
+		Build()
+}
+
+func extractTraceID(input callbacks.CallbackInput) string {
+	state, ok := input.(*WpGraphState)
+	if !ok || state == nil || strings.TrimSpace(state.SessionID) == "" {
+		return "unknown"
+	}
+	return strings.TrimSpace(state.SessionID)
+}
+
+func fallbackTraceID(traceID string) string {
+	if strings.TrimSpace(traceID) == "" {
+		return "unknown"
+	}
+	return traceID
+}
+
+func compactTraceError(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := strings.Join(strings.Fields(err.Error()), " ")
+	if len(msg) > 160 {
+		return msg[:160]
+	}
+	return msg
 }

@@ -103,3 +103,40 @@ func TestGetChatProviderConfigErrorsWhenMissing(t *testing.T) {
 		t.Fatal("expected error for missing provider config")
 	}
 }
+
+func TestLoadExpandsEnvironmentVariables(t *testing.T) {
+	t.Setenv("TEST_OPENAI_API_KEY", "env-openai-key")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := `chat_model:
+  provider: openai
+  providers:
+    openai:
+      api_key: ${TEST_OPENAI_API_KEY}
+      base_url: https://openai.example.com
+      model: gpt-5.4
+work_permit_api:
+  base_url: http://127.0.0.1:8083
+  site_id: 28
+  user_id: 464
+  timeout: 15s
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	provider, err := cfg.GetChatProviderConfig("openai")
+	if err != nil {
+		t.Fatalf("GetChatProviderConfig(openai) error = %v", err)
+	}
+	if provider.APIKey != "env-openai-key" {
+		t.Fatalf("APIKey = %q", provider.APIKey)
+	}
+}

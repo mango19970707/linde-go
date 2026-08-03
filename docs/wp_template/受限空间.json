@@ -1,0 +1,1171 @@
+{
+  "id": 0,
+  "wptempletid": 28,
+  "wptypeid": 4,
+  "processtype": 1,
+  "userid": 0,
+  "siteid": 0,
+  "wpstate": 0,
+  "isapproved": 0,
+  "nfcsn": null,
+  "clocktimeoutcnt": 0,
+  "clockrequired": 0,
+  "handwrittensignature": 0,
+  "sqxx": [
+    {
+      "name": "zylx",
+      "label": "作业类型",
+      "type": "label",
+      "value": "受限空间"
+    },
+    {
+      "auto": true,
+      "name": "sqsj",
+      "label": "申请时间",
+      "type": "datepicker",
+      "required": true,
+      "divider": true
+    },
+    {
+      "name": "wpname",
+      "label": "作业名称",
+      "placeholder": "填写作业名称",
+      "type": "input",
+      "value": "",
+      "required": true,
+      "divider": true
+    },
+    {
+      "path": "/queryDepartmentPair?siteid=",
+      "name": "department",
+      "label": "作业申请单位",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=作业申请人&wptypeid=4",
+      "name": "zysqr",
+      "label": "作业申请人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/getAreaListPair?siteid=",
+      "name": "areaid",
+      "label": "所属区域",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "wrap": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/getEquipmentListPair?siteid=&areaid=1",
+      "name": "equipmentid",
+      "label": "所属设备",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "wrap": true,
+      "enable_filter": true
+    },
+    {
+      "name": "wpplace",
+      "label": "作业地点",
+      "placeholder": "填写作业地点",
+      "type": "input",
+      "value": "",
+      "required": true,
+      "divider": true
+    },
+    {
+      "name": "sxkjnyyjzmc",
+      "label": "受限空间内原有介质名称",
+      "placeholder": "填写受限空间内原有介质名称",
+      "type": "input",
+      "value": "",
+      "required": true,
+      "divider": true
+    },
+    {
+      "name": "discription",
+      "label": "作业内容描述",
+      "placeholder": "请填写作业内容描述",
+      "type": "input",
+      "lines": 2,
+      "value": "",
+      "required": true,
+      "divider": true
+    },
+    {
+      "path": "/wp/queryWpcompanyPair?siteid=",
+      "name": "operationunit",
+      "label": "作业单位",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "wrap": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/wp/queryWpoperatorsPair?operationunit=1,3&wptypeid=4&siteid=",
+      "name": "operators",
+      "label": "作业人员",
+      "type": "selector",
+      "value": [],
+      "required": false,
+      "multi": true,
+      "enable_filter": true
+    },
+    {
+      "name": "operators_zdy",
+      "label": "参与作业的其他人员",
+      "placeholder": "填写参与作业的其他人员，逗号分隔",
+      "type": "input",
+      "value": "",
+      "required": false,
+      "divider": true
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=作业监护人&wptypeid=4",
+      "name": "custodian",
+      "label": "作业监护人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "enable_filter": true
+    },
+    {
+      "name": "custodian_zdy",
+      "label": "其他作业监护人",
+      "placeholder": "填写其他作业监护人，逗号分隔",
+      "type": "input",
+      "value": "",
+      "required": false,
+      "divider": true
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=急救人员&wptypeid=4",
+      "name": "jjry",
+      "label": "急救人员",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "enable_filter": true
+    },
+    {
+      "name": "jjrylxfs",
+      "label": "急救人员联系方式",
+      "placeholder": "填写急救人员联系方式",
+      "type": "input",
+      "value": "",
+      "required": true,
+      "divider": true
+    },
+    {
+      "mode": "datetime",
+      "name": "starttime",
+      "label": "作业计划开始时间",
+      "placeholder": "填写作业计划开始时间",
+      "type": "datepicker",
+      "value": "",
+      "required": true
+    },
+    {
+      "mode": "datetime",
+      "name": "endtime",
+      "label": "作业计划结束时间",
+      "placeholder": "填写作业计划结束时间",
+      "type": "datepicker",
+      "value": "",
+      "required": true,
+      "divider": true
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=安全交底人&wptypeid=4",
+      "name": "aqjdr",
+      "label": "安全交底人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/wp/queryWpcompanyprimePair?operationunit=1,3&siteid=&role=接受交底人&wptypeid=4",
+      "name": "jsjdr",
+      "label": "接受交底人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/wp/queryWpcompanyprimePair?operationunit=1,3&siteid=&role=作业负责人&wptypeid=4",
+      "name": "operatorprime",
+      "label": "作业负责人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/queryAreaPrimePair?siteid=&areaid=1",
+      "name": "szdw",
+      "label": "所在单位负责人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=安全管理部门&wptypeid=4",
+      "name": "aqglbmhqr",
+      "label": "安全管理部门",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": false,
+      "divider": true,
+      "enable_filter": true
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=PTW签发人&wptypeid=4",
+      "name": "approvedby",
+      "label": "审批人",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "enable_filter": true
+    }
+  ],
+  "whsb": [
+    {
+      "path": "/wp/queryWphazardsPair?type=环境",
+      "name": "weihaisb",
+      "label": "危害识别",
+      "type": "selector",
+      "value": [],
+      "required": true,
+      "multi": true,
+      "enable_filter": true
+    },
+    {
+      "name": "qtfx",
+      "label": "其它风险",
+      "placeholder": "填写其它其它风险",
+      "type": "input",
+      "value": "",
+      "required": false
+    },
+    {
+      "path": "/wp/queryWphazardsPair?type=物质",
+      "name": "weihaiwz",
+      "label": "危害物质",
+      "type": "selector",
+      "value": [],
+      "required": false,
+      "multi": true,
+      "enable_filter": true
+    },
+    {
+      "name": "qtwh",
+      "label": "其它危害",
+      "placeholder": "填写其它危害",
+      "type": "input",
+      "value": "",
+      "required": false
+    }
+  ],
+  "aqcs": [
+    {
+      "name": "aqcs",
+      "accordion": "true",
+      "header": [
+        {
+          "path": "/wp/queryWpmeasuresPair?wptypeid=4",
+          "name": "csms",
+          "label": "措施描述",
+          "type": "selector",
+          "required": true,
+          "multi": false,
+          "enable_filter": true,
+          "enable_edit": true
+        },
+        {
+          "name": "qrjg",
+          "label": "确认结果",
+          "type": "checkbox",
+          "items": [
+            {
+              "name": "通过",
+              "id": 1
+            },
+            {
+              "name": "不通过",
+              "id": 2
+            },
+            {
+              "name": "不涉及",
+              "id": 3
+            }
+          ],
+          "required": true
+        },
+        {
+          "name": "qrzj",
+          "label": "确认证据",
+          "type": "media",
+          "required": false
+        },
+        {
+          "name": "qryj",
+          "label": "备注",
+          "type": "input",
+          "value": "",
+          "required": false
+        },
+        {
+          "name": "yqrr",
+          "label": "应确认人",
+          "type": "input",
+          "value": "",
+          "required": false
+        },
+        {
+          "auto": true,
+          "name": "qrsj",
+          "label": "确认时间",
+          "type": "datepicker",
+          "required": true
+        }
+      ],
+      "label": "安全措施",
+      "type": "table",
+      "value": [
+        [
+          [
+            {
+              "name": "1.盛装过有毒、可燃物料的受限空间，所有与受限空间有联系的阀门、管线已加盲板隔离，并落实盲板责任人，未采用水封或关闭阀门代替盲板",
+              "id": 49
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "2.盛装过有毒、可燃物料的受限空间，设备已经过置换、吹扫或蒸煮",
+              "id": 50
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "3.设备通风孔已打开进行自然通风，温度适宜人员作业；必要时采用强制通风或佩戴隔绝式呼吸防护装备,不应采用直接通入氧气或富氧空气的方法补充氧",
+              "id": 51
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "4.转动设备已切断电源，电源开关处已加锁并悬挂“禁止合闸”标志牌",
+              "id": 52
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "5.受限空间内部已具备进人作业条件，易燃易爆物料容器内作业，作业人员未采用非防爆工具，手持电动工具符合作业安全要求",
+              "id": 53
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "6.受限空间进出口通道畅通，无阻碍人员进出的障碍物",
+              "id": 54
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "7.盛装过可燃有毒液体、气体的受限空间，已分析其中的可燃、有毒有害气体和氧气含最，且在安全范围内",
+              "id": 55
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "8.存在大量扬尘的设备已停止扬尘",
+              "id": 56
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "9.用于连续检测的移动式可燃、有毒气体、氧气检测仪已配备到位",
+              "id": 57
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "10.作业人员已佩戴必要的个体防护装备，清楚受限空间内存在的危险因素",
+              "id": 58
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "11.已配备作业应急设施：消防器材（  ）、救生绳（  ）、气防装备（  ），盛有腐蚀性介质的容器作业现场已配备应急用冲洗水   消防器材和气防装备为必选项",
+              "id": 59
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "12.受限空间内作业已配备通信设备",
+              "id": 60
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "13.受限空间出入口四周已设立警戒区",
+              "id": 61
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "14.其他相关特殊作业已办理相应安全作业票",
+              "id": 62
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "15.进入受限空间的人员和物品进行登记和管控",
+              "id": 63
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ],
+        [
+          [
+            {
+              "name": "16.其他安全措施。",
+              "id": 64
+            }
+          ],
+          [],
+          "",
+          "",
+          "",
+          ""
+        ]
+      ]
+    },
+    {
+      "label": "确认人一",
+      "type": "label",
+      "name": "qmr",
+      "value": ""
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=措施确认人&wptypeid=4",
+      "label": "签名",
+      "type": "signature",
+      "required": false,
+      "verify": true,
+      "name": "qm",
+      "label_name": "qmr",
+      "label_time": "qmsj",
+      "enable_filter": true,
+      "label_address": "qmdd"
+    },
+    {
+      "label": "签名时间",
+      "type": "label",
+      "name": "qmsj",
+      "value": ""
+    },
+    {
+      "auto": true,
+      "name": "qmdd",
+      "label": "签名地点",
+      "type": "label",
+      "required": false
+    },
+    {
+      "label": "确认人二（可选）",
+      "type": "label",
+      "name": "drqmr",
+      "value": ""
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=措施确认人&wptypeid=4",
+      "label": "签名",
+      "type": "signature",
+      "required": false,
+      "verify": true,
+      "name": "drqm",
+      "label_name": "drqmr",
+      "label_time": "drqmsj",
+      "enable_filter": true,
+      "label_address": "drqmdd"
+    },
+    {
+      "label": "签名时间",
+      "type": "label",
+      "name": "drqmsj",
+      "value": ""
+    },
+    {
+      "auto": true,
+      "name": "drqmdd",
+      "label": "签名地点",
+      "type": "label",
+      "required": false
+    }
+  ],
+  "qtfx": [
+    {
+      "name": "sb",
+      "header": [
+        {
+          "name": "sbcj",
+          "label": "设备厂家",
+          "type": "input",
+          "lines": 1,
+          "required": true
+        },
+        {
+          "name": "sbxh",
+          "label": "设备型号",
+          "type": "input",
+          "lines": 1,
+          "required": true
+        },
+        {
+          "name": "sbbh",
+          "label": "设备编号",
+          "type": "input",
+          "lines": 1,
+          "required": true
+        },
+        {
+          "mode": "date",
+          "name": "sbjyrq",
+          "label": "设备校验有效期",
+          "placeholder": "设备校验有效期",
+          "type": "datepicker",
+          "value": "",
+          "required": true
+        }
+      ],
+      "label": "设备",
+      "type": "table",
+      "value": []
+    },
+    {
+      "name": "qtfx",
+      "header": [
+        {
+          "path": "/wp/queryWpairmonitorPair?wptypeid=4",
+          "name": "qtmc",
+          "label": "气体名称",
+          "type": "selector",
+          "required": true,
+          "multi": false,
+          "enable_filter": true
+        },
+        {
+          "name": "qybw",
+          "label": "取样部位",
+          "type": "input",
+          "lines": 1,
+          "required": false
+        },
+        {
+          "auto": true,
+          "name": "jcsj",
+          "label": "检测时间",
+          "type": "datepicker",
+          "required": true
+        },
+        {
+          "name": "jcz",
+          "label": "检测值",
+          "type": "input",
+          "lines": 1,
+          "required": true
+        },
+        {
+          "name": "jcjg",
+          "label": "检测结果",
+          "type": "checkbox",
+          "items": [
+            {
+              "name": "通过",
+              "id": 1
+            },
+            {
+              "name": "不通过",
+              "id": 2
+            }
+          ],
+          "required": true
+        },
+        {
+          "name": "jcdd",
+          "label": "检测地点",
+          "type": "label",
+          "required": false
+        },
+        {
+          "name": "qrzj",
+          "label": "确认证据",
+          "type": "media",
+          "required": true
+        },
+        {
+          "label": "签名人",
+          "type": "label",
+          "name": "xm",
+          "value": ""
+        },
+        {
+          "path": "/queryUserinfoPair?siteid=&role=气体分析人&wptypeid=4",
+          "label": "签名",
+          "type": "signature",
+          "required": true,
+          "verify": true,
+          "name": "qm",
+          "label_name": "xm",
+          "enable_filter": true,
+          "label_address": "jcdd"
+        }
+      ],
+      "label": "气体分析",
+      "type": "table",
+      "value": []
+    }
+  ],
+  "huiqian": [
+    {
+      "name": "gbmhq",
+      "header": [
+        {
+          "name": "js",
+          "label": "角色",
+          "type": "input",
+          "required": true
+        },
+        {
+          "name": "zrr",
+          "label": "责任人",
+          "type": "label",
+          "required": true
+        },
+        {
+          "name": "hqyj",
+          "label": "会签意见",
+          "type": "input",
+          "lines": 2,
+          "required": true
+        },
+        {
+          "name": "qrjg",
+          "label": "会签结果",
+          "type": "checkbox",
+          "items": [
+            {
+              "name": "通过",
+              "id": 1
+            },
+            {
+              "name": "驳回",
+              "id": 2
+            }
+          ],
+          "required": true
+        },
+        {
+          "auto": true,
+          "name": "hqsj",
+          "label": "会签时间",
+          "type": "datepicker",
+          "required": true
+        },
+        {
+          "name": "hqdd",
+          "label": "会签地点",
+          "type": "label",
+          "required": false
+        },
+        {
+          "path": "/queryUserinfoPair?siteid=&role=会签人&zrr=",
+          "name": "qm",
+          "label": "签名",
+          "type": "signature",
+          "verify": true,
+          "required": true,
+          "label_address": "hqdd"
+        }
+      ],
+      "label": "各部门会签",
+      "type": "table",
+      "value": [
+        [
+          "作业负责人",
+          "",
+          "安全措施已落实，同意作业",
+          [],
+          "",
+          "",
+          ""
+        ],
+        [
+          "所在单位负责人",
+          "",
+          "安全措施已落实，同意作业",
+          [],
+          "",
+          "",
+          ""
+        ],
+        [
+          "安全管理部门",
+          "",
+          "安全措施已落实，同意作业",
+          [],
+          "",
+          "",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "spr",
+      "label": "审批人",
+      "type": "label",
+      "value": ""
+    },
+    {
+      "name": "hqyj",
+      "label": "审批意见",
+      "type": "input",
+      "lines": 2,
+      "value": "安全措施已落实，同意作业",
+      "required": true
+    },
+    {
+      "auto": true,
+      "name": "hqsj",
+      "label": "会签时间",
+      "type": "datepicker",
+      "value": "",
+      "required": true
+    },
+    {
+      "name": "hqjg",
+      "label": "会签结果",
+      "type": "checkbox",
+      "items": [
+        {
+          "name": "通过",
+          "id": 1
+        },
+        {
+          "name": "驳回到申请人",
+          "id": 2
+        },
+        {
+          "name": "驳回到安全部门",
+          "id": 3
+        }
+      ],
+      "value": [],
+      "required": true
+    },
+    {
+      "name": "sprdd",
+      "label": "审批地点",
+      "type": "label",
+      "required": false
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=审批人&wptypeid=4&spr=",
+      "name": "qm",
+      "label": "签名",
+      "type": "signature",
+      "value": "",
+      "required": true,
+      "verify": true,
+      "label_name": "qz",
+      "label_address": "sprdd"
+    },
+    {
+      "autosign": true,
+      "name": "qz",
+      "label": "签字",
+      "type": "label",
+      "value": "",
+      "required": true
+    },
+    {
+      "name": "sprz",
+      "label": "审批日志",
+      "type": "label",
+      "value": ""
+    }
+  ],
+  "zyjx": [
+    {
+      "name": "zyjx",
+      "header": [
+        {
+          "name": "sj",
+          "label": "时间",
+          "type": "input",
+          "required": true
+        },
+        {
+          "name": "dd",
+          "label": "地点",
+          "type": "input",
+          "required": true
+        },
+        {
+          "name": "cz",
+          "label": "操作",
+          "type": "input",
+          "required": true
+        },
+        {
+          "name": "bzxx",
+          "label": "备注",
+          "type": "input",
+          "lines": 2,
+          "required": true
+        }
+      ],
+      "label": "作业进行",
+      "type": "table",
+      "value": []
+    }
+  ],
+  "jhrjj": [
+    {
+      "name": "jhrjj",
+      "header": [
+        {
+          "name": "jhr",
+          "label": "监护人",
+          "type": "label",
+          "value": ""
+        },
+        {
+          "name": "jhrqmsj",
+          "label": "监护人签名时间",
+          "type": "label",
+          "value": ""
+        },
+        {
+          "path": "/queryUserinfoPair?siteid=&role=作业监护人&wptypeid=4",
+          "label_time": "jhrqmsj",
+          "name": "jhrqm",
+          "verify": true,
+          "label": "监护人签名",
+          "type": "signature",
+          "label_name": "jhr",
+          "enable_filter": true,
+          "required": true
+        },
+        {
+          "name": "jjr",
+          "label": "交接人",
+          "type": "label",
+          "value": ""
+        },
+        {
+          "name": "jjrqmsj",
+          "label": "交接人签名时间",
+          "type": "label",
+          "value": ""
+        },
+        {
+          "path": "/queryUserinfoPair?siteid=&role=作业监护人&wptypeid=4",
+          "label_time": "jjrqmsj",
+          "name": "jjrqm",
+          "verify": true,
+          "label": "交接人签名",
+          "type": "signature",
+          "label_name": "jjr",
+          "enable_filter": true,
+          "required": true
+        }
+      ],
+      "label": "监护人交接",
+      "type": "table",
+      "value": []
+    }
+  ],
+  "zyys": [
+    {
+      "name": "zyys",
+      "header": [
+        {
+          "name": "ysyq",
+          "label": "验收要求",
+          "type": "input",
+          "required": true
+        },
+        {
+          "auto": true,
+          "name": "yssj",
+          "label": "验收时间",
+          "type": "datepicker",
+          "value": "",
+          "required": true
+        },
+        {
+          "name": "zjfj",
+          "label": "证据附件",
+          "type": "media",
+          "required": false
+        }
+      ],
+      "label": "作业验收",
+      "type": "table",
+      "value": [
+        [
+          "确认所有工具已清理，现场恢复原样",
+          "",
+          ""
+        ],
+        [
+          "确认现场人员已撤离",
+          "",
+          ""
+        ],
+        [
+          "验收合格",
+          "",
+          ""
+        ]
+      ]
+    },
+    {
+      "label": "签发人",
+      "type": "label",
+      "name": "jsrqz",
+      "value": ""
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=验收人一&wptypeid=4",
+      "label": "签发人签名",
+      "type": "signature",
+      "required": false,
+      "verify": true,
+      "name": "jsrqm",
+      "label_name": "jsrqz",
+      "label_time": "jsrqmsj",
+      "label_address": "jsrqmdd"
+    },
+    {
+      "label": "签发人签名时间",
+      "type": "label",
+      "name": "jsrqmsj",
+      "value": ""
+    },
+    {
+      "name": "jsrqmdd",
+      "label": "签发人签名地点",
+      "type": "label",
+      "required": false
+    },
+    {
+      "label": "监护人",
+      "type": "label",
+      "name": "jhrqz",
+      "value": ""
+    },
+    {
+      "path": "/queryUserinfoPair?siteid=&role=验收人二&wptypeid=4",
+      "label": "监护人签名",
+      "type": "signature",
+      "required": false,
+      "verify": true,
+      "name": "jhrqm",
+      "label_name": "jhrqz",
+      "label_time": "jhrqmsj",
+      "label_address": "jhrqmdd"
+    },
+    {
+      "label": "监护人签名时间",
+      "type": "label",
+      "name": "jhrqmsj",
+      "value": ""
+    },
+    {
+      "name": "jhrqmdd",
+      "label": "监护人签名地点",
+      "type": "label",
+      "required": false
+    }
+  ],
+  "bz": [
+    {
+      "name": "bz",
+      "header": [
+        {
+          "auto": true,
+          "name": "sj",
+          "label": "时间",
+          "type": "datepicker",
+          "required": true
+        },
+        {
+          "name": "xm",
+          "label": "姓名",
+          "type": "input",
+          "required": true
+        },
+        {
+          "name": "bzxx",
+          "label": "备注信息",
+          "type": "input",
+          "lines": 2,
+          "required": false
+        },
+        {
+          "name": "fj",
+          "label": "附件",
+          "type": "media",
+          "required": false
+        },
+        {
+          "name": "qm",
+          "label": "签名",
+          "type": "signature",
+          "value": "",
+          "verify": false,
+          "required": false
+        }
+      ],
+      "label": "备注",
+      "type": "table",
+      "value": []
+    }
+  ]
+}

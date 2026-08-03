@@ -46,7 +46,7 @@ func Load(path string) (*AppConfig, error) {
 	}
 
 	var cfg AppConfig
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte(os.ExpandEnv(string(data))), &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config file %s: %w", path, err)
 	}
 
