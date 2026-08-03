@@ -7,6 +7,7 @@ import (
 
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
+	"github.com/cloudwego/eino/schema"
 )
 
 const (
@@ -115,6 +116,10 @@ type SubmitWpsApproval struct {
 	Payloads []map[string]any `json:"payloads"`
 }
 
+type WpInfoSupplement struct {
+	Input string `json:"input"`
+}
+
 type WpGraphState struct {
 	CurrentNode      string
 	UserInput        string
@@ -134,6 +139,10 @@ type WpGraphState struct {
 	RetryCount       int
 }
 
+func init() {
+	schema.RegisterName[*WpGraphState]("work_permit_graph_state")
+}
+
 func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphState) (*WpGraphState, error) {
 	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
 		if extractor == nil {
@@ -150,27 +159,57 @@ func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphS
 			return nil, fmt.Errorf("extract work permit info: %w", err)
 		}
 
-		state.Area.Name = strings.TrimSpace(extracted.AreaName)
-		state.StartTime = strings.TrimSpace(extracted.StartTime)
-		state.EndTime = strings.TrimSpace(extracted.EndTime)
-		state.Description = strings.TrimSpace(extracted.Description)
-		state.Equipments = mapEquipmentNames(extracted.EquipmentNames)
-		state.WpCompany.Name = strings.TrimSpace(extracted.CompanyName)
+		if value := strings.TrimSpace(extracted.AreaName); value != "" {
+			state.Area.Name = value
+		}
+		if value := strings.TrimSpace(extracted.StartTime); value != "" {
+			state.StartTime = value
+		}
+		if value := strings.TrimSpace(extracted.EndTime); value != "" {
+			state.EndTime = value
+		}
+		if value := strings.TrimSpace(extracted.Description); value != "" {
+			state.Description = value
+		}
+		if equipments := mapEquipmentNames(extracted.EquipmentNames); len(equipments) > 0 {
+			state.Equipments = equipments
+		}
+		if value := strings.TrimSpace(extracted.CompanyName); value != "" {
+			state.WpCompany.Name = value
+		}
 		return state, nil
 	}
 }
 
 func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
+	if state == nil {
+		if wasInterrupted, hasState, interruptedState := compose.GetInterruptState[*WpGraphState](ctx); wasInterrupted && hasState {
+			state = interruptedState
+		}
+	}
+	if state == nil {
+		return nil, fmt.Errorf("work permit graph state is nil")
+	}
 	state.CurrentNode = nodeValidateWpInfo
+	if isResume, hasData, supplement := compose.GetResumeContext[WpInfoSupplement](ctx); isResume {
+		if !hasData || strings.TrimSpace(supplement.Input) == "" {
+			return nil, fmt.Errorf("work permit info supplement is missing")
+		}
+		state.UserInput = strings.TrimSpace(supplement.Input)
+		state.ValidationStatus = validationInvalid
+		state.ErrorMsg = ""
+		return state, nil
+	}
+
 	missingFields := make([]string, 0, 6)
 	if strings.TrimSpace(state.Area.Name) == "" {
 		missingFields = append(missingFields, "area")
 	}
 	if strings.TrimSpace(state.StartTime) == "" {
-		missingFields = append(missingFields, "start time")
+		missingFields = append(missingFields, "start_time")
 	}
 	if strings.TrimSpace(state.EndTime) == "" {
-		missingFields = append(missingFields, "end time")
+		missingFields = append(missingFields, "end_time")
 	}
 	if strings.TrimSpace(state.Description) == "" {
 		missingFields = append(missingFields, "description")
@@ -178,7 +217,12 @@ func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState
 	if len(missingFields) > 0 {
 		state.ValidationStatus = validationInvalid
 		state.ErrorMsg = fmt.Sprintf("missing required work permit info: %s", strings.Join(missingFields, ", "))
-		return state, nil
+		return nil, compose.StatefulInterrupt(ctx, map[string]any{
+			"operation":      "collect_wp_info",
+			"missing_fields": missingFields,
+			"question":       buildWpInfoQuestion(missingFields),
+			"state":          state,
+		}, state)
 	}
 
 	state.ValidationStatus = validationValid
@@ -253,7 +297,7 @@ func mapEquipmentNames(names []string) []EquipmentInfo {
 }
 
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
 	if extractor == nil {
 		return nil, fmt.Errorf("wp info extractor is nil")
 	}
@@ -307,25 +351,43 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	))
 	graph.AddEdge(nodeSubmitWps, compose.END)
 
-	return graph.Compile(context.Background(), compose.WithMaxRunSteps(20))
+	graphOptions = append(graphOptions, compose.WithMaxRunSteps(20))
+	return graph.Compile(context.Background(), graphOptions...)
 }
 
-/* 智能填充作业票的 Graph 结构
+/*
+	智能填充作业票的 Graph 结构
 
 ```
 START
-  -> askWpInfo (提取作业区域、起止时间、作业描述)
-  -> validateWpInfo (验证基础信息是否完整)
-  |-- valid -> intentRecognition
-  `-- invalid -> askWpInfo (重新询问)
-  -> intentRecognition (根据作业描述，判断需要哪些作业票)
-  -> searchWpTemplate (查询作业票模板)
-  -> fillWps (填充作业票，可并行填充)
-  -> validateFilledWps (验证填充后的作业票信息是否完整)
-  |-- valid -> submitWps
-  `-- invalid -> fillWps (重新填充)
-  -> submitWps (提交)
-  -> END
-```
 
+	-> askWpInfo (提取作业区域、起止时间、作业描述)
+	-> validateWpInfo (验证基础信息是否完整)
+	|-- valid -> intentRecognition
+	`-- invalid -> askWpInfo (重新询问)
+	-> intentRecognition (根据作业描述，判断需要哪些作业票)
+	-> searchWpTemplate (查询作业票模板)
+	-> fillWps (填充作业票，可并行填充)
+	-> validateFilledWps (验证填充后的作业票信息是否完整)
+	|-- valid -> submitWps
+	`-- invalid -> fillWps (重新填充)
+	-> submitWps (提交)
+	-> END
+
+```
 */
+func buildWpInfoQuestion(missingFields []string) string {
+	labels := map[string]string{
+		"area":        "作业区域",
+		"start_time":  "作业开始时间",
+		"end_time":    "作业结束时间",
+		"description": "作业描述",
+	}
+	parts := make([]string, 0, len(missingFields))
+	for _, field := range missingFields {
+		if label, ok := labels[field]; ok {
+			parts = append(parts, label)
+		}
+	}
+	return fmt.Sprintf("请补充%s", strings.Join(parts, "、"))
+}

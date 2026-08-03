@@ -1,21 +1,100 @@
 package main
 
 import (
-  "fmt"
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"time"
+
+	"linde-go-v2/internal/chatmodel"
+	appconfig "linde-go-v2/internal/config"
+	"linde-go-v2/internal/graph"
+	"linde-go-v2/internal/httpapi"
+	"linde-go-v2/internal/tools"
+
+	"github.com/cloudwego/eino/compose"
 )
 
-//TIP <p>To run your code, right-click the code and select <b>Run</b>.</p> <p>Alternatively, click
-// the <icon src="AllIcons.Actions.Execute"/> icon in the gutter and select the <b>Run</b> menu item from here.</p>
-
 func main() {
-  //TIP <p>Press <shortcut actionId="ShowIntentionActions"/> when your caret is at the underlined text
-  // to see how GoLand suggests fixing the warning.</p><p>Alternatively, if available, click the lightbulb to view possible fixes.</p>
-  s := "gopher"
-  fmt.Printf("Hello and welcome, %s!\n", s)
+	if err := run(); err != nil {
+		log.Fatal(err)
+	}
+}
 
-  for i := 1; i <= 5; i++ {
-	//TIP <p>To start your debugging session, right-click your code in the editor and select the Debug option.</p> <p>We have set one <icon src="AllIcons.Debugger.Db_set_breakpoint"/> breakpoint
-	// for you, but you can always add more by pressing <shortcut actionId="ToggleLineBreakpoint"/>.</p>
-	fmt.Println("i =", 100/i)
-  }
+func run() error {
+	configPath := os.Getenv("LINDE_CONFIG")
+	if configPath == "" {
+		configPath = "configs/config.yaml"
+	}
+
+	cfg, err := appconfig.Load(configPath)
+	if err != nil {
+		return err
+	}
+
+	ctx := context.Background()
+	model, err := chatmodel.NewChatModelFromAppConfig(ctx, cfg, "")
+	if err != nil {
+		return fmt.Errorf("create chat model: %w", err)
+	}
+
+	extractor, err := graph.NewLLMWpInfoExtractor(model)
+	if err != nil {
+		return err
+	}
+	recognizer, err := graph.NewLLMWpTypeRecognizer(model)
+	if err != nil {
+		return err
+	}
+
+	toolConfig := tools.ToolConfigFromAppConfig(cfg)
+	templateListTool, err := tools.NewQueryWptempletsNoContentTool(toolConfig)
+	if err != nil {
+		return fmt.Errorf("create template list tool: %w", err)
+	}
+	templateDetailTool, err := tools.NewQueryWptempletTool(toolConfig)
+	if err != nil {
+		return fmt.Errorf("create template detail tool: %w", err)
+	}
+	updateTool, err := tools.NewUpdateWpInfoTool(toolConfig)
+	if err != nil {
+		return fmt.Errorf("create update work permit tool: %w", err)
+	}
+	linkTool, err := tools.NewLinkexistWpinfoTool(toolConfig)
+	if err != nil {
+		return fmt.Errorf("create link work permit tool: %w", err)
+	}
+
+	checkpointStore := httpapi.NewMemoryCheckPointStore()
+	runner, err := graph.BuildWpGraph(
+		extractor,
+		templateListTool,
+		recognizer,
+		templateDetailTool,
+		httpapi.EmptyStructuredMemoryStore{},
+		updateTool,
+		linkTool,
+		compose.WithCheckPointStore(checkpointStore),
+		compose.WithGraphName("work-permit"),
+	)
+	if err != nil {
+		return fmt.Errorf("build work permit graph: %w", err)
+	}
+
+	server := httpapi.NewWorkPermitServer(runner, cfg.WorkPermitAPI.SiteID, cfg.WorkPermitAPI.UserID)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	httpServer := &http.Server{
+		Addr:              ":" + port,
+		Handler:           server.Router(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	log.Printf("work permit API listening on %s", httpServer.Addr)
+	return httpServer.ListenAndServe()
 }

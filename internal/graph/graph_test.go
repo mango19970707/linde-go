@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	einotool "github.com/cloudwego/eino/components/tool"
+	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 )
 
@@ -17,6 +19,38 @@ type stubWpInfoExtractor struct {
 
 func (s stubWpInfoExtractor) Extract(ctx context.Context, input string) (WpInfoExtraction, error) {
 	return s.result, s.err
+}
+
+type recordingWpInfoExtractor struct {
+	results map[string]WpInfoExtraction
+	err     error
+	inputs  []string
+}
+
+func (s *recordingWpInfoExtractor) Extract(ctx context.Context, input string) (WpInfoExtraction, error) {
+	s.inputs = append(s.inputs, input)
+	if s.err != nil {
+		return WpInfoExtraction{}, s.err
+	}
+	return s.results[input], nil
+}
+
+type inMemoryCheckPointStore struct {
+	data map[string][]byte
+}
+
+func newInMemoryCheckPointStore() *inMemoryCheckPointStore {
+	return &inMemoryCheckPointStore{data: map[string][]byte{}}
+}
+
+func (s *inMemoryCheckPointStore) Get(ctx context.Context, checkPointID string) ([]byte, bool, error) {
+	value, ok := s.data[checkPointID]
+	return value, ok, nil
+}
+
+func (s *inMemoryCheckPointStore) Set(ctx context.Context, checkPointID string, checkPoint []byte) error {
+	s.data[checkPointID] = checkPoint
+	return nil
 }
 
 func TestAskWpInfoNodeMapsExtractorResultToState(t *testing.T) {
@@ -71,6 +105,41 @@ func TestAskWpInfoNodeMapsExtractorResultToState(t *testing.T) {
 	}
 }
 
+func TestAskWpInfoNodeMergesSupplementInsteadOfClearingExistingFields(t *testing.T) {
+	t.Parallel()
+
+	node := newAskWpInfoNode(stubWpInfoExtractor{
+		result: WpInfoExtraction{
+			StartTime: "2026-08-04 08:00",
+			EndTime:   "2026-08-04 17:00",
+		},
+	})
+
+	state := &WpGraphState{
+		UserInput:        "补充时间",
+		Area:             AreaInfo{Name: "A区"},
+		Description:      "动火作业",
+		StartTime:        "",
+		EndTime:          "",
+		ValidationStatus: validationInvalid,
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newAskWpInfoNode() error = %v", err)
+	}
+
+	if got.Area.Name != "A区" {
+		t.Fatalf("Area.Name = %q", got.Area.Name)
+	}
+	if got.Description != "动火作业" {
+		t.Fatalf("Description = %q", got.Description)
+	}
+	if got.StartTime != "2026-08-04 08:00" || got.EndTime != "2026-08-04 17:00" {
+		t.Fatalf("times = %q - %q", got.StartTime, got.EndTime)
+	}
+}
+
 func TestValidateWpInfoNodeRejectsMissingFields(t *testing.T) {
 	t.Parallel()
 
@@ -80,19 +149,29 @@ func TestValidateWpInfoNodeRejectsMissingFields(t *testing.T) {
 		Description: "动火作业",
 	}
 
-	got, err := validateWpInfoNode(context.Background(), state)
-	if err != nil {
-		t.Fatalf("validateWpInfoNode() error = %v", err)
+	_, err := validateWpInfoNode(context.Background(), state)
+	if err == nil {
+		t.Fatal("validateWpInfoNode() error = nil")
+	}
+	if !strings.Contains(err.Error(), "collect_wp_info") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateWpInfoNodeInterruptsWhenRequiredFieldsMissing(t *testing.T) {
+	t.Parallel()
+
+	state := &WpGraphState{
+		Area:        AreaInfo{Name: "A区"},
+		Description: "动火作业",
 	}
 
-	if got.CurrentNode != nodeValidateWpInfo {
-		t.Fatalf("CurrentNode = %q", got.CurrentNode)
+	_, err := validateWpInfoNode(context.Background(), state)
+	if err == nil {
+		t.Fatal("validateWpInfoNode() error = nil")
 	}
-	if got.ValidationStatus != validationInvalid {
-		t.Fatalf("ValidationStatus = %q", got.ValidationStatus)
-	}
-	if got.ErrorMsg == "" {
-		t.Fatalf("ErrorMsg is empty")
+	if !strings.Contains(err.Error(), "start_time") || !strings.Contains(err.Error(), "end_time") {
+		t.Fatalf("error = %v", err)
 	}
 }
 
@@ -101,6 +180,89 @@ func TestBuildWpGraphRequiresExtractor(t *testing.T) {
 
 	if _, err := BuildWpGraph(nil, nil, nil, nil, nil, nil, nil); err == nil {
 		t.Fatalf("BuildWpGraph(nil) error = nil")
+	}
+}
+
+func TestBuildWpGraphResumesAfterSupplementalInput(t *testing.T) {
+	t.Parallel()
+
+	templateListRaw := `{"success":true,"data":[{"id":243,"templetname":"作业许可证","wptypename":"PTW800作业票","wptypeid":23}]}`
+	templateDetailRaw := `{"success":true,"data":{"id":243,"wptypeid":23,"wptypename":"PTW800作业票","templetname":"作业许可证","applycontent":"{\"sqxx\":[{\"name\":\"discription\",\"type\":\"input\",\"value\":\"\"}]}","applycontent_object":{"sqxx":[{"name":"discription","type":"input","value":""}]}}}`
+
+	extractor := &recordingWpInfoExtractor{
+		results: map[string]WpInfoExtraction{
+			"初始输入": {
+				AreaName:    "A区",
+				Description: "动火作业",
+			},
+			"补充时间：2026-08-04 08:00 到 2026-08-04 17:00": {
+				StartTime: "2026-08-04 08:00",
+				EndTime:   "2026-08-04 17:00",
+			},
+		},
+	}
+	detailTool := &recordingWpTemplateDetailTool{
+		responses: map[int]string{243: templateDetailRaw},
+	}
+	store := newInMemoryCheckPointStore()
+
+	graph, err := BuildWpGraph(
+		extractor,
+		stubWpTemplateTool{result: templateListRaw},
+		stubWpTypeRecognizer{},
+		detailTool,
+		stubStructuredMemoryStore{},
+		&recordingUpdateWpInfoTool{},
+		&recordingLinkWpInfoTool{},
+		compose.WithCheckPointStore(store),
+		compose.WithGraphName("work-permit"),
+	)
+	if err != nil {
+		t.Fatalf("BuildWpGraph() error = %v", err)
+	}
+
+	checkPointID := "cp-missing-info"
+	_, err = graph.Invoke(context.Background(), &WpGraphState{
+		SiteID:    28,
+		UserID:    464,
+		UserInput: "初始输入",
+	}, compose.WithCheckPointID(checkPointID))
+	if err == nil {
+		t.Fatal("graph.Invoke() error = nil")
+	}
+
+	info, ok := compose.ExtractInterruptInfo(err)
+	if !ok {
+		t.Fatalf("first error is not interrupt: %v", err)
+	}
+	if len(info.InterruptContexts) != 1 {
+		t.Fatalf("len(first InterruptContexts) = %d", len(info.InterruptContexts))
+	}
+
+	firstPayload := info.InterruptContexts[0].Info.(map[string]any)
+	if firstPayload["operation"] != "collect_wp_info" {
+		t.Fatalf("first operation = %#v", firstPayload["operation"])
+	}
+
+	resumeCtx := compose.ResumeWithData(context.Background(), info.InterruptContexts[0].ID, WpInfoSupplement{
+		Input: "补充时间：2026-08-04 08:00 到 2026-08-04 17:00",
+	})
+
+	_, err = graph.Invoke(resumeCtx, &WpGraphState{}, compose.WithCheckPointID(checkPointID))
+	if err == nil {
+		t.Fatal("resumed graph.Invoke() error = nil")
+	}
+
+	info, ok = compose.ExtractInterruptInfo(err)
+	if !ok {
+		t.Fatalf("second error is not interrupt: %v", err)
+	}
+	secondPayload := info.InterruptContexts[0].Info.(map[string]any)
+	if secondPayload["operation"] != "submit_work_permits" {
+		t.Fatalf("second operation = %#v", secondPayload["operation"])
+	}
+	if len(extractor.inputs) != 2 {
+		t.Fatalf("extractor inputs = %#v", extractor.inputs)
 	}
 }
 
