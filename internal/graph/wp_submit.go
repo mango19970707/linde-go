@@ -17,6 +17,14 @@ func newSubmitWpsNode(updateWpInfoTool einotool.InvokableTool, linkWpInfoTool ei
 		if linkWpInfoTool == nil {
 			return nil, fmt.Errorf("link work permit tool is nil")
 		}
+		if state == nil {
+			if wasInterrupted, hasState, interruptedState := compose.GetInterruptState[*WpGraphState](ctx); wasInterrupted && hasState {
+				state = interruptedState
+			}
+		}
+		if state == nil {
+			return nil, fmt.Errorf("work permit graph state is nil")
+		}
 
 		if isResume, hasData, approval := compose.GetResumeContext[SubmitWpsApproval](ctx); isResume {
 			if !hasData {
@@ -103,8 +111,8 @@ func submitApprovedWps(ctx context.Context, updateWpInfoTool einotool.InvokableT
 }
 
 type createdWpResponse struct {
-	Success bool `json:"success"`
-	Data    any  `json:"data"`
+	Success bool           `json:"success"`
+	Data    map[string]any `json:"data"`
 }
 
 func decodeCreatedWpID(raw string) (int, error) {
@@ -115,13 +123,26 @@ func decodeCreatedWpID(raw string) (int, error) {
 	if !response.Success {
 		return 0, fmt.Errorf("create work permit failed")
 	}
-	switch value := response.Data.(type) {
+	if response.Data == nil {
+		return 0, fmt.Errorf("response data is empty")
+	}
+	return decodeCreatedWpIDFromMap(response.Data)
+}
+
+func decodeCreatedWpIDFromMap(data map[string]any) (int, error) {
+	switch value := data["id"].(type) {
 	case float64:
 		return int(value), nil
 	case int:
 		return value, nil
+	case json.Number:
+		id, err := value.Int64()
+		if err != nil {
+			return 0, fmt.Errorf("parse response id: %w", err)
+		}
+		return int(id), nil
 	default:
-		return 0, fmt.Errorf("response data is not an id: %T", response.Data)
+		return 0, fmt.Errorf("response data is not an id: %T", data)
 	}
 }
 

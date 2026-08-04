@@ -97,6 +97,10 @@ type WpInfoExtractor interface {
 	Extract(ctx context.Context, input string) (WpInfoExtraction, error)
 }
 
+type AreaResolver interface {
+	Resolve(ctx context.Context, siteID int, userInput, extractedName string) (AreaInfo, error)
+}
+
 type WpTypeRecognizer interface {
 	Recognize(ctx context.Context, description string, templates []WpMetaInfo) ([]int, error)
 }
@@ -147,10 +151,13 @@ func init() {
 	schema.RegisterName[*WpGraphState]("work_permit_graph_state")
 }
 
-func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+func newAskWpInfoNode(extractor WpInfoExtractor, areaResolver AreaResolver) func(context.Context, *WpGraphState) (*WpGraphState, error) {
 	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
 		if extractor == nil {
 			return nil, fmt.Errorf("wp info extractor is nil")
+		}
+		if areaResolver == nil {
+			return nil, fmt.Errorf("area resolver is nil")
 		}
 
 		state.CurrentNode = nodeAskWpInfo
@@ -164,7 +171,13 @@ func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphS
 		}
 
 		if value := strings.TrimSpace(extracted.AreaName); value != "" {
-			state.Area.Name = value
+			area, err := areaResolver.Resolve(ctx, state.SiteID, state.UserInput, value)
+			if err != nil {
+				return nil, fmt.Errorf("resolve area %q: %w", value, err)
+			}
+			if area.ID != 0 || strings.TrimSpace(area.Name) != "" {
+				state.Area = area
+			}
 		}
 		if value := strings.TrimSpace(extracted.StartTime); value != "" {
 			state.StartTime = value
@@ -301,9 +314,12 @@ func mapEquipmentNames(names []string) []EquipmentInfo {
 }
 
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, areaResolver AreaResolver, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
 	if extractor == nil {
 		return nil, fmt.Errorf("wp info extractor is nil")
+	}
+	if areaResolver == nil {
+		return nil, fmt.Errorf("area resolver is nil")
 	}
 	if templateTool == nil {
 		return nil, fmt.Errorf("work permit template tool is nil")
@@ -326,7 +342,7 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 
 	graph := compose.NewGraph[*WpGraphState, *WpGraphState]()
 
-	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(newAskWpInfoNode(extractor)))
+	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(newAskWpInfoNode(extractor, areaResolver)))
 	graph.AddLambdaNode(nodeValidateWpInfo, compose.InvokableLambda(validateWpInfoNode))
 	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, recognizer)))
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
@@ -505,9 +521,5 @@ func compactTraceError(err error) string {
 	if err == nil {
 		return ""
 	}
-	msg := strings.Join(strings.Fields(err.Error()), " ")
-	if len(msg) > 160 {
-		return msg[:160]
-	}
-	return msg
+	return strings.Join(strings.Fields(err.Error()), " ")
 }

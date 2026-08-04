@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -30,12 +31,13 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 			results: map[string]WpInfoExtraction{
 				"input": {
 					AreaName:    "A",
-					StartTime:   "2026-08-03 08:00",
-					EndTime:     "2026-08-03 17:00",
+					StartTime:   "2026/08/03-08:00:00",
+					EndTime:     "2026/08/03-17:00:00",
 					Description: "maintenance",
 				},
 			},
 		},
+		&stubAreaResolver{result: AreaInfo{ID: 1, Name: "A"}},
 		stubWpTemplateTool{result: string(templateListRaw)},
 		stubWpTypeRecognizer{},
 		&recordingWpTemplateDetailTool{
@@ -61,5 +63,22 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 	output := logs.String()
 	if !strings.Contains(output, "trace=session-123") {
 		t.Fatalf("logs do not contain session trace id: %s", output)
+	}
+}
+
+func TestCompactTraceErrorKeepsWholeMessageOnOneLine(t *testing.T) {
+	err := fmt.Errorf("first line\nsecond line\twith  spaces %s", strings.Repeat("x", 200))
+
+	got := compactTraceError(err)
+
+	if strings.Contains(got, "\n") {
+		t.Fatalf("expected one line, got %q", got)
+	}
+	if strings.Contains(got, "\t") {
+		t.Fatalf("expected tabs to be normalized, got %q", got)
+	}
+	want := "first line second line with spaces " + strings.Repeat("x", 200)
+	if got != want {
+		t.Fatalf("unexpected compacted error: %q", got)
 	}
 }

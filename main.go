@@ -63,6 +63,14 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create template list tool: %w", err)
 	}
+	areaListTool, err := tools.NewGetAreaListPairTool(toolConfig)
+	if err != nil {
+		return fmt.Errorf("create area list tool: %w", err)
+	}
+	areaResolver, err := graph.NewToolAreaResolver(areaListTool)
+	if err != nil {
+		return fmt.Errorf("create area resolver: %w", err)
+	}
 	templateDetailTool, err := tools.NewQueryWptempletTool(toolConfig)
 	if err != nil {
 		return fmt.Errorf("create template detail tool: %w", err)
@@ -79,6 +87,7 @@ func run() error {
 	checkpointStore := httpapi.NewMemoryCheckPointStore()
 	runner, err := graph.BuildWpGraph(
 		extractor,
+		areaResolver,
 		templateListTool,
 		recognizer,
 		templateDetailTool,
@@ -95,7 +104,7 @@ func run() error {
 	server := httpapi.NewWorkPermitServer(runner, cfg.WorkPermitAPI.SiteID, cfg.WorkPermitAPI.UserID)
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080"
+		port = "7070"
 	}
 
 	httpServer := &http.Server{
