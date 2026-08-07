@@ -170,7 +170,7 @@ func TestValidateWpInfoNodeInterruptsWhenRequiredFieldsMissing(t *testing.T) {
 func TestBuildWpGraphRequiresExtractor(t *testing.T) {
 	t.Parallel()
 
-	if _, err := BuildWpGraph(nil, nil, nil, nil, nil, WpFillRules{}, nil, nil); err == nil {
+	if _, err := BuildWpGraph(nil, nil, nil, nil, nil, nil, WpFillRules{}, nil, nil); err == nil {
 		t.Fatalf("BuildWpGraph(nil) error = nil")
 	}
 }
@@ -203,6 +203,7 @@ func TestBuildWpGraphResumesAfterSupplementalInput(t *testing.T) {
 		stubWpTemplateTool{result: templateListRaw},
 		stubWpTypeRecognizer{},
 		detailTool,
+		stubChatModel{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		&recordingUpdateWpInfoTool{},
@@ -289,6 +290,7 @@ func DisabledBuildWpGraphResumesApprovalAfterSubmitInterrupt(t *testing.T) {
 		stubWpTemplateTool{result: templateListRaw},
 		stubWpTypeRecognizer{},
 		detailTool,
+		stubChatModel{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		updateTool,
@@ -516,17 +518,55 @@ type stubStructuredMemoryStore struct {
 	err     error
 }
 
-func (s stubStructuredMemoryStore) Lookup(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error) {
+func (s stubStructuredMemoryStore) FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]StructuredMemoryEntry, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	entries := make([]StructuredMemoryEntry, 0)
+	for _, entry := range s.entries {
+		if entry.WpTypeID == wpTypeID && strings.TrimSpace(entry.Area) == strings.TrimSpace(area) {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+
+func (s stubStructuredMemoryStore) ListAreasByType(ctx context.Context, wpTypeID int) ([]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	seen := make(map[string]struct{})
+	areas := make([]string, 0)
+	for _, entry := range s.entries {
+		if entry.WpTypeID != wpTypeID {
+			continue
+		}
+		area := strings.TrimSpace(entry.Area)
+		if area == "" {
+			continue
+		}
+		if _, ok := seen[area]; ok {
+			continue
+		}
+		seen[area] = struct{}{}
+		areas = append(areas, area)
+	}
+	return areas, nil
+}
+
+func (s stubStructuredMemoryStore) FindByType(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error) {
 	return s.entries, s.err
 }
 
 func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 	t.Parallel()
 
-	node := newFillWpsNode(stubStructuredMemoryStore{
+	node := newFillWpsNode(stubChatModel{
+		response: schema.AssistantMessage(`{"fields":{"sqxx.8.value":"13900000000"}}`, nil),
+	}, stubStructuredMemoryStore{
 		entries: []StructuredMemoryEntry{
-			{WpTypeID: 23, AreaID: 101, FieldName: "wpplace", FieldValue: "历史区域点位", Source: "structured_memory", UpdatedAt: 2},
-			{WpTypeID: 23, AreaID: 101, FieldName: "qfrdh", FieldValue: "13800138000", Source: "structured_memory", UpdatedAt: 3},
+			{WpTypeID: 23, Area: "空分装置", FieldName: "sqxx.6.value", FieldValue: "历史区域点位", Source: "structured_memory", UpdatedAt: 2},
+			{WpTypeID: 23, Area: "空分装置", FieldName: "sqxx.7.value", FieldValue: "13800138000", Source: "structured_memory", UpdatedAt: 3},
 		},
 	}, WpFillRules{})
 
@@ -558,9 +598,9 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 						map[string]any{"name": "discription", "label": "作业描述", "type": "input", "value": ""},
 						map[string]any{"name": "starttime", "label": "作业计划开始时间", "type": "datepicker", "value": ""},
 						map[string]any{"name": "endtime", "label": "作业计划结束时间", "type": "datepicker", "value": ""},
-						map[string]any{"name": "wpplace", "label": "作业地点", "type": "input", "value": ""},
-						map[string]any{"name": "qfrdh", "label": "签发人电话", "type": "input", "value": ""},
-						map[string]any{"name": "jsrdh", "label": "接收人电话", "type": "input", "value": ""},
+						map[string]any{"name": "wpplace", "label": "作业地点", "type": "input", "value": "", "required": true},
+						map[string]any{"name": "qfrdh", "label": "签发人电话", "type": "input", "value": "", "required": true},
+						map[string]any{"name": "jsrdh", "label": "接收人电话", "type": "input", "value": "", "required": true},
 					},
 				},
 			},
@@ -585,7 +625,7 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 	if filled.WpType != "PTW800作业票" {
 		t.Fatalf("WpType = %q", filled.WpType)
 	}
-	if len(filled.UnfilledFields) != 1 || filled.UnfilledFields[0].Label != "接收人电话" {
+	if len(filled.UnfilledFields) != 0 {
 		t.Fatalf("UnfilledFields = %#v", filled.UnfilledFields)
 	}
 
@@ -619,7 +659,7 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 	if values["qfrdh"] != "13800138000" {
 		t.Fatalf("qfrdh = %#v", values["qfrdh"])
 	}
-	if values["jsrdh"] != "" {
+	if values["jsrdh"] != "13900000000" {
 		t.Fatalf("jsrdh = %#v", values["jsrdh"])
 	}
 }
@@ -627,9 +667,9 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 func TestFillWpsNodeSkipsFieldsConfiguredForWpType(t *testing.T) {
 	t.Parallel()
 
-	node := newFillWpsNode(stubStructuredMemoryStore{
+	node := newFillWpsNode(stubChatModel{}, stubStructuredMemoryStore{
 		entries: []StructuredMemoryEntry{
-			{WpTypeID: 2, AreaID: 101, FieldName: "operationunit", FieldValue: []any{selectorValue(11, "历史单位")}, Source: "structured_memory"},
+			{WpTypeID: 2, Area: "区域", FieldName: "sqxx.0.value", FieldValue: []any{selectorValue(11, "历史单位")}, Source: "structured_memory"},
 		},
 	}, WpFillRules{ByWpTypeID: map[int]WpFillRule{
 		2: {SkipFields: []string{"operationunit"}},
@@ -667,7 +707,7 @@ func TestFillWpsNodeSkipsFieldsConfiguredForWpType(t *testing.T) {
 func TestFillWpsNodeRejectsMalformedTemplate(t *testing.T) {
 	t.Parallel()
 
-	node := newFillWpsNode(stubStructuredMemoryStore{}, WpFillRules{})
+	node := newFillWpsNode(stubChatModel{}, stubStructuredMemoryStore{}, WpFillRules{})
 	state := &WpGraphState{
 		WpTemplates: []WpTemplate{
 			{ID: 243, Name: "作业许可证", ApplyContentObject: map[string]any{"bad": "shape"}},

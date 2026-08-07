@@ -72,6 +72,7 @@ func TestBuildWpGraphResumesApprovalAfterSubmitInterruptWithMarshaledFixtures(t 
 		stubWpTemplateTool{result: string(templateListRawBytes)},
 		stubWpTypeRecognizer{},
 		detailTool,
+		stubChatModel{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		updateTool,

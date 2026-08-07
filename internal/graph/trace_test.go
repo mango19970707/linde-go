@@ -44,6 +44,7 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 				243: `{"success":true,"data":{"id":243,"wptypeid":23,"wptypename":"PTW","templetname":"作业许可证","applycontent_object":{"sqxx":[{"name":"discription","type":"input","value":""}]}}}`,
 			},
 		},
+		stubChatModel{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		&recordingUpdateWpInfoTool{},

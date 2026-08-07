@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/eino/callbacks"
+	"github.com/cloudwego/eino/components/model"
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
@@ -97,16 +98,21 @@ type WpTypeRecognizer interface {
 }
 
 type StructuredMemoryEntry struct {
-	WpTypeID   int    `json:"wp_type_id"`
-	AreaID     int    `json:"area_id"`
-	FieldName  string `json:"field_name"`
-	FieldValue any    `json:"field_value"`
-	Source     string `json:"source"`
-	UpdatedAt  int64  `json:"updated_at"`
+	WpTypeID        int    `json:"wp_type_id"`       // 作业票类型ID
+	WpTypeName      string `json:"wp_type_name"`     // 作业票类型名称
+	Area            string `json:"area"`             // 作业地点名称
+	WorkDescription string `json:"work_description"` // 作业描述
+
+	FieldName  string `json:"field_name"`  // 字段在模板中的json路径
+	FieldValue any    `json:"field_value"` // 字段值
+	Source     string `json:"source"`      // 来源文件
+	UpdatedAt  int64  `json:"updated_at"`  // 更新时间
 }
 
 type StructuredMemoryStore interface {
-	Lookup(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error)
+	FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]StructuredMemoryEntry, error)
+	ListAreasByType(ctx context.Context, wpTypeID int) ([]string, error)
+	FindByType(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error)
 }
 
 type SubmitWpsApproval struct {
@@ -278,7 +284,7 @@ func routeAfterFilledWpsValidation(ctx context.Context, state *WpGraphState) (st
 }
 
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, fillRules WpFillRules, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, chatModel model.BaseChatModel, memoryStore StructuredMemoryStore, fillRules WpFillRules, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
 	if extractor == nil {
 		return nil, fmt.Errorf("wp info extractor is nil")
 	}
@@ -290,6 +296,9 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	}
 	if templateDetailTool == nil {
 		return nil, fmt.Errorf("work permit template detail tool is nil")
+	}
+	if chatModel == nil {
+		return nil, fmt.Errorf("chat model is nil")
 	}
 	if memoryStore == nil {
 		return nil, fmt.Errorf("structured memory store is nil")
@@ -307,7 +316,7 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	graph.AddLambdaNode(nodeValidateWpInfo, compose.InvokableLambda(validateWpInfoNode))
 	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, recognizer)))
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
-	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(memoryStore, fillRules)))
+	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(chatModel, memoryStore, fillRules)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))
 	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(newSubmitWpsNode(updateWpInfoTool, linkWpInfoTool)))
 

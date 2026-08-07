@@ -79,7 +79,7 @@ func run() error {
 	checkpointStore := httpapi.NewMemoryCheckPointStore()
 	memoryPath := os.Getenv("LINDE_STRUCTURED_MEMORY")
 	if memoryPath == "" {
-		memoryPath = "data/structured_memory.json"
+		memoryPath = "data/structured_memory.db"
 	}
 	structuredMemoryStore, err := graph.LoadStructuredMemoryStore(memoryPath)
 	if err != nil {
@@ -94,6 +94,7 @@ func run() error {
 		templateListTool,
 		recognizer,
 		templateDetailTool,
+		model,
 		structuredMemoryStore,
 		fillRules,
 		updateTool,
