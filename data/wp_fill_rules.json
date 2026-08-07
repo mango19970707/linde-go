@@ -1,0 +1,56 @@
+{
+  "1": {
+    "skip_fields": [
+      "approvedby",
+      "qm",
+      "qz"
+    ]
+  },
+  "2": {
+    "skip_fields": [
+      "approvedby",
+      "aqglbmhqr",
+      "aqjdr",
+      "gwdbbz",
+      "jsjdr",
+      "qm",
+      "qz",
+      "szdw"
+    ]
+  },
+  "9": {
+    "skip_fields": [
+      "qm",
+      "qz"
+    ]
+  },
+  "23": {
+    "skip_fields": [
+      "sqsj",
+      "qfr",
+      "jsr",
+      "dttqzk",
+      "sponsor",
+      "jhr",
+      "qfrqm",
+      "jsrqm",
+      "qm",
+      "qz"
+    ],
+    "fill_fields": [
+      "qfrdh",
+      "operationunit",
+      "jsrdh",
+      "wpname",
+      "areaid",
+      "equipmentid",
+      "wpplace",
+      "discription",
+      "starttime",
+      "endtime",
+      "sfxysgfahjsa",
+      "qfjc",
+      "bz"
+    ]
+  }
+}

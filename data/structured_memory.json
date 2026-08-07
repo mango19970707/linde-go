@@ -1,0 +1,93 @@
+[
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "wpplace",
+    "field_value": "air-separation-unit-east-cold-box-platform",
+    "source": "structured_memory_mock",
+    "updated_at": 1722600000
+  },
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "qfrdh",
+    "field_value": "13800138000",
+    "source": "structured_memory_mock",
+    "updated_at": 1722600001
+  },
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "jsrdh",
+    "field_value": "13900139000",
+    "source": "structured_memory_mock",
+    "updated_at": 1722600002
+  },
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "wpname",
+    "field_value": "cold-box-valve-replacement",
+    "source": "structured_memory_mock",
+    "updated_at": 1722600003
+  },
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "sfxysgfahjsa",
+    "field_value": [
+      {
+        "id": 1,
+        "name": "yes"
+      }
+    ],
+    "source": "structured_memory_mock",
+    "updated_at": 1722600004
+  },
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "qfjc",
+    "field_value": [
+      {
+        "id": 1,
+        "name": "applicable"
+      },
+      {
+        "id": 4,
+        "name": "continuous"
+      }
+    ],
+    "source": "structured_memory_mock",
+    "updated_at": 1722600005
+  },
+  {
+    "wp_type_id": 23,
+    "area_id": 101,
+    "field_name": "bz",
+    "field_value": "verify-isolation-monitoring-and-gas-test-before-work; restore-site-after-work",
+    "source": "structured_memory_mock",
+    "updated_at": 1722600006
+  },
+  {
+    "wp_type_id": 2,
+    "area_id": 101,
+    "field_name": "wpplace",
+    "field_value": "hot-work-point-north-unit-area",
+    "source": "structured_memory_mock",
+    "updated_at": 1722600007
+  },
+  {
+    "wp_type_id": 2,
+    "area_id": 101,
+    "field_name": "method",
+    "field_value": [
+      {
+        "id": 1,
+        "name": "electric-welding"
+      }
+    ],
+    "source": "structured_memory_mock",
+    "updated_at": 1722600008
+  }
+]

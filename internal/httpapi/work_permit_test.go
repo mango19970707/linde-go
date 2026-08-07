@@ -94,7 +94,7 @@ func TestWorkPermitHandlerReturnsApprovalPreview(t *testing.T) {
 	runner := &recordingRunner{}
 	interruptErr := newInterruptError(t, map[string]any{
 		"operation":  "submit_work_permits",
-		"filled_wps": []graph.FilledWp{{TemplateID: 243, Name: "permit"}},
+		"filled_wps": []graph.FilledWp{{WpType: "一级动火", Name: "permit"}},
 	})
 	runner.call = func(ctx context.Context, input *graph.WpGraphState, opts ...compose.Option) (*graph.WpGraphState, error) {
 		return nil, interruptErr
@@ -109,7 +109,7 @@ func TestWorkPermitHandlerReturnsApprovalPreview(t *testing.T) {
 	if response.Status != "need_approval" {
 		t.Fatalf("status = %q", response.Status)
 	}
-	if len(response.FilledWps) != 1 || response.FilledWps[0].TemplateID != 243 {
+	if len(response.FilledWps) != 1 || response.FilledWps[0].WpType != "一级动火" {
 		t.Fatalf("filled_wps = %#v", response.FilledWps)
 	}
 }

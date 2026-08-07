@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -28,11 +29,14 @@ func (s stubChatModel) Stream(ctx context.Context, input []*schema.Message, opts
 func TestLLMWpInfoExtractorExtractParsesJSON(t *testing.T) {
 	t.Parallel()
 
-	extractor, err := NewLLMWpInfoExtractor(stubChatModel{
-		response: schema.AssistantMessage(`{"area_name":"A区","start_time":"2026-08-04 08:00","end_time":"2026-08-04 17:00","description":"动火作业","equipment_names":["3号焊机"],"company_name":"某某公司"}`, nil),
-	})
+	extractor, err := newLLMWpInfoExtractor(
+		stubChatModel{
+			response: schema.AssistantMessage(`{"area_name":"A区","start_time":"2026-08-04 08:00","end_time":"2026-08-04 17:00","description":"动火作业","equipment_names":["3号焊机"],"company_name":"某某公司"}`, nil),
+		},
+		time.Date(2026, 8, 3, 9, 0, 0, 0, mustLoadLocation(t, "Asia/Shanghai")),
+	)
 	if err != nil {
-		t.Fatalf("NewLLMWpInfoExtractor() error = %v", err)
+		t.Fatalf("newLLMWpInfoExtractor() error = %v", err)
 	}
 
 	got, err := extractor.Extract(context.Background(), "明天在A区动火作业")
@@ -43,14 +47,40 @@ func TestLLMWpInfoExtractorExtractParsesJSON(t *testing.T) {
 	if got.AreaName != "A区" {
 		t.Fatalf("AreaName = %q", got.AreaName)
 	}
-	if got.StartTime != "2026-08-04 08:00" {
+	if got.StartTime != "2026/08/04-08:00:00" {
 		t.Fatalf("StartTime = %q", got.StartTime)
 	}
-	if got.EndTime != "2026-08-04 17:00" {
+	if got.EndTime != "2026/08/04-17:00:00" {
 		t.Fatalf("EndTime = %q", got.EndTime)
 	}
 	if got.Description != "动火作业" {
 		t.Fatalf("Description = %q", got.Description)
+	}
+}
+
+func TestLLMWpInfoExtractorExtractNormalizesRelativeTimes(t *testing.T) {
+	t.Parallel()
+
+	extractor, err := newLLMWpInfoExtractor(
+		stubChatModel{
+			response: schema.AssistantMessage(`{"area_name":"A区","start_time":"明天8点","end_time":"明天12点","description":"动火作业","equipment_names":[],"company_name":"某某公司"}`, nil),
+		},
+		time.Date(2026, 8, 3, 9, 0, 0, 0, mustLoadLocation(t, "Asia/Shanghai")),
+	)
+	if err != nil {
+		t.Fatalf("newLLMWpInfoExtractor() error = %v", err)
+	}
+
+	got, err := extractor.Extract(context.Background(), "明天8-12点，在A区动火作业")
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+
+	if got.StartTime != "2026/08/04-08:00:00" {
+		t.Fatalf("StartTime = %q", got.StartTime)
+	}
+	if got.EndTime != "2026/08/04-12:00:00" {
+		t.Fatalf("EndTime = %q", got.EndTime)
 	}
 }
 
@@ -90,4 +120,14 @@ func TestLLMWpTypeRecognizerRecognizeParsesTypeIDs(t *testing.T) {
 	if len(got) != 2 || got[0] != 1 || got[1] != 9 {
 		t.Fatalf("Recognize() = %#v", got)
 	}
+}
+
+func mustLoadLocation(t *testing.T, name string) *time.Location {
+	t.Helper()
+
+	location, err := time.LoadLocation(name)
+	if err != nil {
+		t.Fatalf("time.LoadLocation(%q): %v", name, err)
+	}
+	return location
 }
