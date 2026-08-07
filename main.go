@@ -77,11 +77,7 @@ func run() error {
 	}
 
 	checkpointStore := httpapi.NewMemoryCheckPointStore()
-	memoryPath := os.Getenv("LINDE_STRUCTURED_MEMORY")
-	if memoryPath == "" {
-		memoryPath = "data/structured_memory.db"
-	}
-	structuredMemoryStore, err := graph.LoadStructuredMemoryStore(memoryPath)
+	structuredMemoryStore, err := graph.LoadStructuredMemoryStore(cfg.StructuredMemoryDB.Driver, cfg.StructuredMemoryDB.DSN)
 	if err != nil {
 		return fmt.Errorf("load structured memory: %w", err)
 	}

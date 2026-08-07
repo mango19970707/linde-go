@@ -10,8 +10,9 @@ import (
 )
 
 type AppConfig struct {
-	ChatModel     ChatModelConfig     `yaml:"chat_model"`
-	WorkPermitAPI WorkPermitAPIConfig `yaml:"work_permit_api"`
+	ChatModel          ChatModelConfig          `yaml:"chat_model"`
+	WorkPermitAPI      WorkPermitAPIConfig      `yaml:"work_permit_api"`
+	StructuredMemoryDB StructuredMemoryDBConfig `yaml:"structured_memory_db"`
 }
 
 type ChatModelConfig struct {
@@ -37,6 +38,11 @@ type WorkPermitAPIConfig struct {
 	UserID  int               `yaml:"user_id"`
 	Timeout time.Duration     `yaml:"timeout"`
 	Headers map[string]string `yaml:"headers"`
+}
+
+type StructuredMemoryDBConfig struct {
+	Driver string `yaml:"driver"`
+	DSN    string `yaml:"dsn"`
 }
 
 func Load(path string) (*AppConfig, error) {

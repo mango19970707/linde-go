@@ -26,3 +26,7 @@ work_permit_api:
   user_id: 464
   timeout: 30s
   headers: {}
+
+structured_memory_db:
+  driver: sqlite
+  dsn: data/structured_memory.db

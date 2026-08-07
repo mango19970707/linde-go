@@ -16,15 +16,25 @@ type SQLStructuredMemoryStore struct {
 	dialect string
 }
 
-func LoadStructuredMemoryStore(dsn string) (StructuredMemoryStore, error) {
+func LoadStructuredMemoryStore(driver, dsn string) (StructuredMemoryStore, error) {
+	driver = strings.TrimSpace(driver)
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {
 		return nil, fmt.Errorf("structured memory dsn is empty")
 	}
 
-	driverName := "sqlite"
-	if isPostgresDSN(dsn) {
-		driverName = "pgx"
+	driverName := strings.ToLower(driver)
+	if driverName == "" {
+		if isPostgresDSN(dsn) {
+			driverName = "pgx"
+		} else {
+			driverName = "sqlite"
+		}
+	}
+	switch driverName {
+	case "sqlite", "pgx":
+	default:
+		return nil, fmt.Errorf("unsupported structured memory driver %q", driverName)
 	}
 
 	db, err := sql.Open(driverName, dsn)
