@@ -30,3 +30,6 @@ work_permit_api:
 structured_memory_db:
   driver: sqlite
   dsn: data/structured_memory.db
+  # postgres 配置示例：
+  # driver: pgx
+  # dsn: postgres://postgres:password@127.0.0.1:5432/linde?sslmode=disable
