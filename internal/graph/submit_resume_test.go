@@ -60,7 +60,6 @@ func TestBuildWpGraphResumesApprovalAfterSubmitInterruptWithMarshaledFixtures(t 
 			},
 		},
 	}
-	areaResolver := &stubAreaResolver{result: AreaInfo{ID: 76, Name: "Area A"}}
 	detailTool := &recordingWpTemplateDetailTool{
 		responses: map[int]string{243: string(templateDetailRawBytes)},
 	}
@@ -70,11 +69,11 @@ func TestBuildWpGraphResumesApprovalAfterSubmitInterruptWithMarshaledFixtures(t 
 
 	graph, err := BuildWpGraph(
 		extractor,
-		areaResolver,
 		stubWpTemplateTool{result: string(templateListRawBytes)},
 		stubWpTypeRecognizer{},
 		detailTool,
 		stubStructuredMemoryStore{},
+		WpFillRules{},
 		updateTool,
 		linkTool,
 		compose.WithCheckPointStore(store),

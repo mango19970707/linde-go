@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-func newFillWpsNode(memoryStore StructuredMemoryStore) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+func newFillWpsNode(memoryStore StructuredMemoryStore, fillRules WpFillRules) func(context.Context, *WpGraphState) (*WpGraphState, error) {
 	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
 		if memoryStore == nil {
 			return nil, fmt.Errorf("structured memory store is nil")
@@ -16,7 +16,7 @@ func newFillWpsNode(memoryStore StructuredMemoryStore) func(context.Context, *Wp
 
 		filledWps := make([]FilledWp, 0, len(state.WpTemplates))
 		for _, template := range state.WpTemplates {
-			filled, err := fillSingleWp(ctx, state, template, memoryStore)
+			filled, err := fillSingleWp(ctx, state, template, memoryStore, fillRules)
 			if err != nil {
 				return nil, err
 			}
@@ -29,7 +29,7 @@ func newFillWpsNode(memoryStore StructuredMemoryStore) func(context.Context, *Wp
 	}
 }
 
-func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate, memoryStore StructuredMemoryStore) (FilledWp, error) {
+func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate, memoryStore StructuredMemoryStore, fillRules WpFillRules) (FilledWp, error) {
 	content, err := cloneMap(template.ApplyContentObject)
 	if err != nil {
 		return FilledWp{}, fmt.Errorf("clone template %d content: %w", template.ID, err)
@@ -40,7 +40,7 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 		return FilledWp{}, fmt.Errorf("template %d sqxx is missing or invalid", template.ID)
 	}
 
-	memoryEntries, err := memoryStore.Lookup(ctx, template.WpTypeID, state.Area.ID)
+	memoryEntries, err := memoryStore.Lookup(ctx, template.WpTypeID)
 	if err != nil {
 		return FilledWp{}, fmt.Errorf("lookup structured memory for template %d: %w", template.ID, err)
 	}
@@ -63,27 +63,45 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 		if strings.TrimSpace(name) == "" || !supportsFill(field) {
 			continue
 		}
+		label, _ := field["label"].(string)
+		displayName := strings.TrimSpace(label)
+		if displayName == "" {
+			displayName = name
+		}
+		if !fillRules.ShouldFill(template.WpTypeID, name, displayName) {
+			continue
+		}
 
 		value, source, found := resolveFieldValue(name, state, memoryIndex)
 		if found {
 			field["value"] = value
-			filledFields = append(filledFields, FilledField{Name: name, Value: value, Source: source})
+			filledFields = append(filledFields, FilledField{Label: displayName, Value: value, Source: source})
 			continue
 		}
 
 		if isEmptyFieldValue(field["value"]) {
-			unfilledFields = append(unfilledFields, UnfilledField{Name: name})
+			unfilledFields = append(unfilledFields, UnfilledField{Label: displayName})
 		}
 	}
 
 	content["sqxx"] = sqxx
 	return FilledWp{
-		TemplateID:     template.ID,
+		WpType:         readableWpType(template),
 		Name:           template.Name,
 		Content:        content,
 		FilledFields:   filledFields,
 		UnfilledFields: unfilledFields,
 	}, nil
+}
+
+func readableWpType(template WpTemplate) string {
+	if strings.TrimSpace(template.WpTypeName) != "" {
+		return template.WpTypeName
+	}
+	if strings.TrimSpace(template.Name) != "" {
+		return template.Name
+	}
+	return fmt.Sprintf("%d", template.WpTypeID)
 }
 
 func cloneMap(value map[string]any) (map[string]any, error) {
@@ -139,10 +157,10 @@ func resolveStateFieldValue(name string, state *WpGraphState) (any, bool) {
 		}
 		return []any{selectorValue(state.WpCompany.ID, state.WpCompany.Name)}, true
 	case "areaid":
-		if state.Area.ID == 0 && strings.TrimSpace(state.Area.Name) == "" {
+		if strings.TrimSpace(state.Area) == "" {
 			return nil, false
 		}
-		return []any{selectorValue(state.Area.ID, state.Area.Name)}, true
+		return state.Area, true
 	case "equipmentid":
 		if len(state.Equipments) == 0 {
 			return nil, false

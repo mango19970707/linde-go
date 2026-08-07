@@ -63,14 +63,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create template list tool: %w", err)
 	}
-	areaListTool, err := tools.NewGetAreaListPairTool(toolConfig)
-	if err != nil {
-		return fmt.Errorf("create area list tool: %w", err)
-	}
-	areaResolver, err := graph.NewToolAreaResolver(areaListTool)
-	if err != nil {
-		return fmt.Errorf("create area resolver: %w", err)
-	}
 	templateDetailTool, err := tools.NewQueryWptempletTool(toolConfig)
 	if err != nil {
 		return fmt.Errorf("create template detail tool: %w", err)
@@ -85,13 +77,25 @@ func run() error {
 	}
 
 	checkpointStore := httpapi.NewMemoryCheckPointStore()
+	memoryPath := os.Getenv("LINDE_STRUCTURED_MEMORY")
+	if memoryPath == "" {
+		memoryPath = "data/structured_memory.json"
+	}
+	structuredMemoryStore, err := graph.LoadStructuredMemoryStore(memoryPath)
+	if err != nil {
+		return fmt.Errorf("load structured memory: %w", err)
+	}
+	fillRules, err := graph.LoadWpFillRules("data/wp_fill_rules.json")
+	if err != nil {
+		return fmt.Errorf("load work permit fill rules: %w", err)
+	}
 	runner, err := graph.BuildWpGraph(
 		extractor,
-		areaResolver,
 		templateListTool,
 		recognizer,
 		templateDetailTool,
-		httpapi.EmptyStructuredMemoryStore{},
+		structuredMemoryStore,
+		fillRules,
 		updateTool,
 		linkTool,
 		compose.WithCheckPointStore(checkpointStore),

@@ -8,6 +8,6 @@ import (
 
 type EmptyStructuredMemoryStore struct{}
 
-func (EmptyStructuredMemoryStore) Lookup(ctx context.Context, wpTypeID, areaID int) ([]graph.StructuredMemoryEntry, error) {
+func (EmptyStructuredMemoryStore) Lookup(ctx context.Context, wpTypeID int) ([]graph.StructuredMemoryEntry, error) {
 	return nil, nil
 }

@@ -37,7 +37,6 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 				},
 			},
 		},
-		&stubAreaResolver{result: AreaInfo{ID: 1, Name: "A"}},
 		stubWpTemplateTool{result: string(templateListRaw)},
 		stubWpTypeRecognizer{},
 		&recordingWpTemplateDetailTool{
@@ -46,6 +45,7 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 			},
 		},
 		stubStructuredMemoryStore{},
+		WpFillRules{},
 		&recordingUpdateWpInfoTool{},
 		&recordingLinkWpInfoTool{},
 	)

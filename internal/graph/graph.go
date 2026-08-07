@@ -26,11 +26,6 @@ const (
 	validationInvalid = "invalid"
 )
 
-type AreaInfo struct {
-	ID   int
-	Name string
-}
-
 type EquipmentInfo struct {
 	ID   int
 	Name string
@@ -67,7 +62,7 @@ type WpTemplate struct {
 }
 
 type FilledWp struct {
-	TemplateID     int
+	WpType         string
 	Name           string
 	Content        interface{}
 	FilledFields   []FilledField
@@ -75,13 +70,13 @@ type FilledWp struct {
 }
 
 type FilledField struct {
-	Name   string
+	Label  string
 	Value  any
 	Source string
 }
 
 type UnfilledField struct {
-	Name string
+	Label string
 }
 
 type WpInfoExtraction struct {
@@ -97,25 +92,21 @@ type WpInfoExtractor interface {
 	Extract(ctx context.Context, input string) (WpInfoExtraction, error)
 }
 
-type AreaResolver interface {
-	Resolve(ctx context.Context, siteID int, userInput, extractedName string) (AreaInfo, error)
-}
-
 type WpTypeRecognizer interface {
 	Recognize(ctx context.Context, description string, templates []WpMetaInfo) ([]int, error)
 }
 
 type StructuredMemoryEntry struct {
-	WpTypeID   int
-	AreaID     int
-	FieldName  string
-	FieldValue any
-	Source     string
-	UpdatedAt  int64
+	WpTypeID   int    `json:"wp_type_id"`
+	AreaID     int    `json:"area_id"`
+	FieldName  string `json:"field_name"`
+	FieldValue any    `json:"field_value"`
+	Source     string `json:"source"`
+	UpdatedAt  int64  `json:"updated_at"`
 }
 
 type StructuredMemoryStore interface {
-	Lookup(ctx context.Context, wpTypeID, areaID int) ([]StructuredMemoryEntry, error)
+	Lookup(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error)
 }
 
 type SubmitWpsApproval struct {
@@ -133,7 +124,7 @@ type WpGraphState struct {
 	UserInput        string
 	SiteID           int
 	UserID           int
-	Area             AreaInfo
+	Area             string
 	StartTime        string
 	EndTime          string
 	Description      string
@@ -151,13 +142,10 @@ func init() {
 	schema.RegisterName[*WpGraphState]("work_permit_graph_state")
 }
 
-func newAskWpInfoNode(extractor WpInfoExtractor, areaResolver AreaResolver) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphState) (*WpGraphState, error) {
 	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
 		if extractor == nil {
 			return nil, fmt.Errorf("wp info extractor is nil")
-		}
-		if areaResolver == nil {
-			return nil, fmt.Errorf("area resolver is nil")
 		}
 
 		state.CurrentNode = nodeAskWpInfo
@@ -171,13 +159,7 @@ func newAskWpInfoNode(extractor WpInfoExtractor, areaResolver AreaResolver) func
 		}
 
 		if value := strings.TrimSpace(extracted.AreaName); value != "" {
-			area, err := areaResolver.Resolve(ctx, state.SiteID, state.UserInput, value)
-			if err != nil {
-				return nil, fmt.Errorf("resolve area %q: %w", value, err)
-			}
-			if area.ID != 0 || strings.TrimSpace(area.Name) != "" {
-				state.Area = area
-			}
+			state.Area = value
 		}
 		if value := strings.TrimSpace(extracted.StartTime); value != "" {
 			state.StartTime = value
@@ -187,12 +169,6 @@ func newAskWpInfoNode(extractor WpInfoExtractor, areaResolver AreaResolver) func
 		}
 		if value := strings.TrimSpace(extracted.Description); value != "" {
 			state.Description = value
-		}
-		if equipments := mapEquipmentNames(extracted.EquipmentNames); len(equipments) > 0 {
-			state.Equipments = equipments
-		}
-		if value := strings.TrimSpace(extracted.CompanyName); value != "" {
-			state.WpCompany.Name = value
 		}
 		return state, nil
 	}
@@ -219,7 +195,7 @@ func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState
 	}
 
 	missingFields := make([]string, 0, 6)
-	if strings.TrimSpace(state.Area.Name) == "" {
+	if strings.TrimSpace(state.Area) == "" {
 		missingFields = append(missingFields, "area")
 	}
 	if strings.TrimSpace(state.StartTime) == "" {
@@ -301,25 +277,10 @@ func routeAfterFilledWpsValidation(ctx context.Context, state *WpGraphState) (st
 	return nodeFillWps, nil
 }
 
-func mapEquipmentNames(names []string) []EquipmentInfo {
-	equipments := make([]EquipmentInfo, 0, len(names))
-	for _, name := range names {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		equipments = append(equipments, EquipmentInfo{Name: name})
-	}
-	return equipments
-}
-
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph(extractor WpInfoExtractor, areaResolver AreaResolver, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, memoryStore StructuredMemoryStore, fillRules WpFillRules, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
 	if extractor == nil {
 		return nil, fmt.Errorf("wp info extractor is nil")
-	}
-	if areaResolver == nil {
-		return nil, fmt.Errorf("area resolver is nil")
 	}
 	if templateTool == nil {
 		return nil, fmt.Errorf("work permit template tool is nil")
@@ -342,11 +303,11 @@ func BuildWpGraph(extractor WpInfoExtractor, areaResolver AreaResolver, template
 
 	graph := compose.NewGraph[*WpGraphState, *WpGraphState]()
 
-	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(newAskWpInfoNode(extractor, areaResolver)))
+	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(newAskWpInfoNode(extractor)))
 	graph.AddLambdaNode(nodeValidateWpInfo, compose.InvokableLambda(validateWpInfoNode))
 	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, recognizer)))
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
-	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(memoryStore)))
+	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(memoryStore, fillRules)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))
 	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(newSubmitWpsNode(updateWpInfoTool, linkWpInfoTool)))
 
