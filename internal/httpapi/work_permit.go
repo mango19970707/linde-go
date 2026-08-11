@@ -42,20 +42,36 @@ type sessionState struct {
 }
 
 type WorkPermitServer struct {
-	runner WorkPermitRunner
-	siteID int
-	userID int
+	runner      WorkPermitRunner
+	promptStore graph.PromptStore
+	siteID      int
+	userID      int
 
 	mu       sync.Mutex
 	sessions map[string]sessionState
 }
 
-func NewWorkPermitServer(runner WorkPermitRunner, siteID, userID int) *WorkPermitServer {
+func NewWorkPermitServer(runner WorkPermitRunner, args ...any) *WorkPermitServer {
+	var promptStore graph.PromptStore
+	var siteID int
+	var userID int
+
+	switch len(args) {
+	case 2:
+		siteID, _ = args[0].(int)
+		userID, _ = args[1].(int)
+	case 3:
+		promptStore, _ = args[0].(graph.PromptStore)
+		siteID, _ = args[1].(int)
+		userID, _ = args[2].(int)
+	}
+
 	return &WorkPermitServer{
-		runner:   runner,
-		siteID:   siteID,
-		userID:   userID,
-		sessions: make(map[string]sessionState),
+		runner:      runner,
+		promptStore: promptStore,
+		siteID:      siteID,
+		userID:      userID,
+		sessions:    make(map[string]sessionState),
 	}
 }
 
@@ -63,6 +79,10 @@ func (s *WorkPermitServer) Router() http.Handler {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.POST("/api/work-permits", s.handleCreateWorkPermit)
+	router.GET("/api/prompts", s.handleListPrompts)
+	router.GET("/api/prompts/:key", s.handleGetPrompt)
+	router.PUT("/api/prompts/:key", s.handleUpdatePrompt)
+	router.POST("/api/prompts/:key/reset", s.handleResetPrompt)
 	return router
 }
 

@@ -33,7 +33,7 @@ func TestWorkPermitHandlerReturnsNeedMoreInfo(t *testing.T) {
 		return nil, interruptErr
 	}
 
-	server := NewWorkPermitServer(runner, 28, 464)
+	server := NewWorkPermitServer(runner, nil, 28, 464)
 	rec := postJSON(server, `{"input":"initial work description"}`)
 
 	if rec.Code != http.StatusOK {
@@ -70,7 +70,7 @@ func TestWorkPermitHandlerResumesWithSupplement(t *testing.T) {
 		return &graph.WpGraphState{CurrentNode: "intentRecognition"}, nil
 	}
 
-	server := NewWorkPermitServer(runner, 28, 464)
+	server := NewWorkPermitServer(runner, nil, 28, 464)
 	first := postJSON(server, `{"input":"initial work description"}`)
 	firstResponse := decodeResponse(t, first)
 
@@ -100,7 +100,7 @@ func TestWorkPermitHandlerReturnsApprovalPreview(t *testing.T) {
 		return nil, interruptErr
 	}
 
-	server := NewWorkPermitServer(runner, 28, 464)
+	server := NewWorkPermitServer(runner, nil, 28, 464)
 	rec := postJSON(server, `{"input":"complete work description"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -128,7 +128,7 @@ func TestWorkPermitHandlerResumesApprovalWithFullPayloads(t *testing.T) {
 		return &graph.WpGraphState{CurrentNode: "submitWps"}, nil
 	}
 
-	server := NewWorkPermitServer(runner, 28, 464)
+	server := NewWorkPermitServer(runner, nil, 28, 464)
 	first := postJSON(server, `{"input":"complete work description"}`)
 	firstResponse := decodeResponse(t, first)
 

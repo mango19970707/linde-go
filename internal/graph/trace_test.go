@@ -45,6 +45,7 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 			},
 		},
 		stubChatModel{},
+		stubPromptStore{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		&recordingUpdateWpInfoTool{},

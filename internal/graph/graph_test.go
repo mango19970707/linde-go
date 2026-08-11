@@ -170,7 +170,7 @@ func TestValidateWpInfoNodeInterruptsWhenRequiredFieldsMissing(t *testing.T) {
 func TestBuildWpGraphRequiresExtractor(t *testing.T) {
 	t.Parallel()
 
-	if _, err := BuildWpGraph(nil, nil, nil, nil, nil, nil, WpFillRules{}, nil, nil); err == nil {
+	if _, err := BuildWpGraph(nil, nil, nil, nil, nil, nil, nil, WpFillRules{}, nil, nil); err == nil {
 		t.Fatalf("BuildWpGraph(nil) error = nil")
 	}
 }
@@ -204,6 +204,7 @@ func TestBuildWpGraphResumesAfterSupplementalInput(t *testing.T) {
 		stubWpTypeRecognizer{},
 		detailTool,
 		stubChatModel{},
+		stubPromptStore{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		&recordingUpdateWpInfoTool{},
@@ -291,6 +292,7 @@ func DisabledBuildWpGraphResumesApprovalAfterSubmitInterrupt(t *testing.T) {
 		stubWpTypeRecognizer{},
 		detailTool,
 		stubChatModel{},
+		stubPromptStore{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		updateTool,
@@ -563,6 +565,11 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 
 	node := newFillWpsNode(stubChatModel{
 		response: schema.AssistantMessage(`{"fields":{"sqxx.8.value":"13900000000"}}`, nil),
+	}, stubPromptStore{
+		prompts: map[string]PromptDefinition{
+			PromptKeyWpFillAreaSelection:   {Key: PromptKeyWpFillAreaSelection, Content: "area prompt"},
+			PromptKeyWpFillFieldCompletion: {Key: PromptKeyWpFillFieldCompletion, Content: "fill prompt"},
+		},
 	}, stubStructuredMemoryStore{
 		entries: []StructuredMemoryEntry{
 			{WpTypeID: 23, Area: "空分装置", FieldName: "sqxx.6.value", FieldValue: "历史区域点位", Source: "structured_memory", UpdatedAt: 2},
@@ -667,7 +674,7 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 func TestFillWpsNodeSkipsFieldsConfiguredForWpType(t *testing.T) {
 	t.Parallel()
 
-	node := newFillWpsNode(stubChatModel{}, stubStructuredMemoryStore{
+	node := newFillWpsNode(stubChatModel{}, stubPromptStore{}, stubStructuredMemoryStore{
 		entries: []StructuredMemoryEntry{
 			{WpTypeID: 2, Area: "区域", FieldName: "sqxx.0.value", FieldValue: []any{selectorValue(11, "历史单位")}, Source: "structured_memory"},
 		},
@@ -707,7 +714,7 @@ func TestFillWpsNodeSkipsFieldsConfiguredForWpType(t *testing.T) {
 func TestFillWpsNodeRejectsMalformedTemplate(t *testing.T) {
 	t.Parallel()
 
-	node := newFillWpsNode(stubChatModel{}, stubStructuredMemoryStore{}, WpFillRules{})
+	node := newFillWpsNode(stubChatModel{}, stubPromptStore{}, stubStructuredMemoryStore{}, WpFillRules{})
 	state := &WpGraphState{
 		WpTemplates: []WpTemplate{
 			{ID: 243, Name: "作业许可证", ApplyContentObject: map[string]any{"bad": "shape"}},

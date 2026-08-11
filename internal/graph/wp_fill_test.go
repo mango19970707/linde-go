@@ -150,3 +150,152 @@ func TestFillWpsNodeUsesAreaGuessStructuredMemory(t *testing.T) {
 		t.Fatalf("source = %q", got.FilledWps[0].FilledFields[0].Source)
 	}
 }
+
+func TestFillWpsNodeIgnoresLLMFillTimeout(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{
+		err: context.DeadlineExceeded,
+	}, stubStructuredMemoryStore{}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "压缩机厂房",
+		Description: "压缩机检修动火",
+		WpTemplates: []WpTemplate{{
+			ID:       245,
+			WpTypeID: 23,
+			Name:     "作业许可证",
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":     "wpplace",
+						"label":    "作业地点",
+						"type":     "input",
+						"value":    "",
+						"required": true,
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	if len(got.FilledWps) != 1 {
+		t.Fatalf("len(FilledWps) = %d", len(got.FilledWps))
+	}
+	if len(got.FilledWps[0].FilledFields) != 0 {
+		t.Fatalf("FilledFields = %#v", got.FilledWps[0].FilledFields)
+	}
+	if len(got.FilledWps[0].UnfilledFields) != 1 {
+		t.Fatalf("UnfilledFields = %#v", got.FilledWps[0].UnfilledFields)
+	}
+	if got.FilledWps[0].UnfilledFields[0].Label != "作业地点" {
+		t.Fatalf("UnfilledFields[0] = %#v", got.FilledWps[0].UnfilledFields[0])
+	}
+}
+
+func TestFillWpsNodeIgnoresAreaSelectionTimeout(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{
+		err: context.DeadlineExceeded,
+	}, stubStructuredMemoryStore{
+		entries: []StructuredMemoryEntry{
+			{
+				WpTypeID:        23,
+				Area:            "空分装置",
+				WorkDescription: "空分巡检",
+				FieldName:       "sqxx.0.value",
+				FieldValue:      "空分装置北侧平台",
+				Source:          "sample-a",
+				UpdatedAt:       10,
+			},
+		},
+	}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "压缩机区域",
+		Description: "压缩机检修动火",
+		WpTemplates: []WpTemplate{{
+			ID:       243,
+			WpTypeID: 23,
+			Name:     "作业许可证",
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":     "wpplace",
+						"label":    "作业地点",
+						"type":     "input",
+						"value":    "",
+						"required": true,
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	if len(got.FilledWps) != 1 {
+		t.Fatalf("len(FilledWps) = %d", len(got.FilledWps))
+	}
+	if len(got.FilledWps[0].FilledFields) != 0 {
+		t.Fatalf("FilledFields = %#v", got.FilledWps[0].FilledFields)
+	}
+	if len(got.FilledWps[0].UnfilledFields) != 1 {
+		t.Fatalf("UnfilledFields = %#v", got.FilledWps[0].UnfilledFields)
+	}
+}
+
+func TestFillWpsNodeIgnoresMalformedLLMFillResponse(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{
+		responses: []*schema.Message{
+			schema.AssistantMessage(`{"fields":`, nil),
+		},
+	}, stubStructuredMemoryStore{}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "压缩机厂房",
+		Description: "压缩机检修动火",
+		WpTemplates: []WpTemplate{{
+			ID:       245,
+			WpTypeID: 23,
+			Name:     "作业许可证",
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":     "wpplace",
+						"label":    "作业地点",
+						"type":     "input",
+						"value":    "",
+						"required": true,
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	if len(got.FilledWps) != 1 {
+		t.Fatalf("len(FilledWps) = %d", len(got.FilledWps))
+	}
+	if len(got.FilledWps[0].FilledFields) != 0 {
+		t.Fatalf("FilledFields = %#v", got.FilledWps[0].FilledFields)
+	}
+	if len(got.FilledWps[0].UnfilledFields) != 1 {
+		t.Fatalf("UnfilledFields = %#v", got.FilledWps[0].UnfilledFields)
+	}
+}

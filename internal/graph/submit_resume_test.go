@@ -73,6 +73,7 @@ func TestBuildWpGraphResumesApprovalAfterSubmitInterruptWithMarshaledFixtures(t 
 		stubWpTypeRecognizer{},
 		detailTool,
 		stubChatModel{},
+		stubPromptStore{},
 		stubStructuredMemoryStore{},
 		WpFillRules{},
 		updateTool,

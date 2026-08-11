@@ -49,11 +49,16 @@ func run() error {
 		return fmt.Errorf("create chat model: %w", err)
 	}
 
-	extractor, err := graph.NewLLMWpInfoExtractor(model)
+	promptStore, err := graph.LoadPromptStore(cfg.StructuredMemoryDB.Driver, cfg.StructuredMemoryDB.DSN)
+	if err != nil {
+		return fmt.Errorf("load prompt store: %w", err)
+	}
+
+	extractor, err := graph.NewLLMWpInfoExtractor(model, promptStore)
 	if err != nil {
 		return err
 	}
-	recognizer, err := graph.NewLLMWpTypeRecognizer(model)
+	recognizer, err := graph.NewLLMWpTypeRecognizer(model, promptStore)
 	if err != nil {
 		return err
 	}
@@ -91,6 +96,7 @@ func run() error {
 		recognizer,
 		templateDetailTool,
 		model,
+		promptStore,
 		structuredMemoryStore,
 		fillRules,
 		updateTool,
@@ -102,7 +108,7 @@ func run() error {
 		return fmt.Errorf("build work permit graph: %w", err)
 	}
 
-	server := httpapi.NewWorkPermitServer(runner, cfg.WorkPermitAPI.SiteID, cfg.WorkPermitAPI.UserID)
+	server := httpapi.NewWorkPermitServer(runner, promptStore, cfg.WorkPermitAPI.SiteID, cfg.WorkPermitAPI.UserID)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "7070"

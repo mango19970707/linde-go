@@ -16,13 +16,11 @@ import (
 const (
 	wpInfoExtractionPrompt = `你是作业票信息提取器。请从用户输入中提取作业区域名称、开始时间、结束时间、作业描述、设备名称、作业单位名称。
 只返回一个合法 JSON 对象，不要返回 Markdown、解释或额外文本。
-
 要求：
-1. 时间字段只填写作业时间，不填写解释。
-2. 如果用户使用“今天、明天、后天”等相对时间，请先结合当前日期理解后再输出。
+1. 时间字段只填写作业时间，不填写说明。
+2. 如果用户使用“今天”“明天”“后天”等相对时间，请先结合当前日期理解后再输出。
 3. 如果无法确定某字段，返回空字符串或空数组。
 4. 不要猜测区域、设备、公司的 ID。
-
 JSON 结构必须是：
 {
   "area_name": "",
@@ -35,7 +33,7 @@ JSON 结构必须是：
 	wpTimeOutputLayout = "2006/01/02-15:04:05"
 )
 
-var timeOnlyPattern = regexp.MustCompile(`(?i)^\s*(\d{1,2})(?:[:点时](\d{1,2}))?(?:[:分](\d{1,2}))?\s*(?:秒?(\d{1,2}))?\s*(?:点|时)?\s*$`)
+var timeOnlyPattern = regexp.MustCompile(`(?i)^\s*(\d{1,2})(?:[:点时鐐规椂](\d{1,2}))?(?:[:分鍒](\d{1,2}))?(?:[:秒绉](\d{1,2}))?\s*[点时]?\s*$`)
 
 type wpInfoExtractionJSON struct {
 	AreaName       string   `json:"area_name"`
@@ -47,27 +45,63 @@ type wpInfoExtractionJSON struct {
 }
 
 type llmWpInfoExtractor struct {
-	chatModel model.BaseChatModel
-	now       func() time.Time
-	location  *time.Location
+	chatModel   model.BaseChatModel
+	promptStore PromptStore
+	now         func() time.Time
+	location    *time.Location
 }
 
-func NewLLMWpInfoExtractor(chatModel model.BaseChatModel) (WpInfoExtractor, error) {
+func NewLLMWpInfoExtractor(chatModel model.BaseChatModel, args ...any) (WpInfoExtractor, error) {
 	location, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
 		return nil, fmt.Errorf("load Asia/Shanghai location: %w", err)
 	}
-	return newLLMWpInfoExtractor(chatModel, time.Now().In(location))
+
+	promptStore := newDefaultPromptStore()
+	if len(args) > 0 {
+		store, ok := args[0].(PromptStore)
+		if !ok {
+			return nil, fmt.Errorf("prompt store has invalid type %T", args[0])
+		}
+		promptStore = store
+	}
+
+	return newLLMWpInfoExtractor(chatModel, promptStore, time.Now().In(location))
 }
 
-func newLLMWpInfoExtractor(chatModel model.BaseChatModel, current time.Time) (WpInfoExtractor, error) {
+func newLLMWpInfoExtractor(chatModel model.BaseChatModel, args ...any) (WpInfoExtractor, error) {
 	if chatModel == nil {
 		return nil, fmt.Errorf("chat model is nil")
 	}
 
+	promptStore := newDefaultPromptStore()
+	current := time.Now()
+	switch len(args) {
+	case 1:
+		value, ok := args[0].(time.Time)
+		if !ok {
+			return nil, fmt.Errorf("extractor argument has invalid type %T", args[0])
+		}
+		current = value
+	case 2:
+		store, ok := args[0].(PromptStore)
+		if !ok {
+			return nil, fmt.Errorf("prompt store has invalid type %T", args[0])
+		}
+		value, ok := args[1].(time.Time)
+		if !ok {
+			return nil, fmt.Errorf("current time has invalid type %T", args[1])
+		}
+		promptStore = store
+		current = value
+	default:
+		return nil, fmt.Errorf("unexpected extractor argument count %d", len(args))
+	}
+
 	location := current.Location()
 	return &llmWpInfoExtractor{
-		chatModel: chatModel,
+		chatModel:   chatModel,
+		promptStore: promptStore,
 		now: func() time.Time {
 			return current
 		},
@@ -81,8 +115,13 @@ func (e *llmWpInfoExtractor) Extract(ctx context.Context, input string) (WpInfoE
 		return WpInfoExtraction{}, fmt.Errorf("user input is empty")
 	}
 
+	prompt, err := e.prompt(ctx)
+	if err != nil {
+		return WpInfoExtraction{}, err
+	}
+
 	response, err := e.chatModel.Generate(ctx, []*schema.Message{
-		schema.SystemMessage(e.prompt()),
+		schema.SystemMessage(prompt),
 		schema.UserMessage(input),
 	})
 	if err != nil {
@@ -113,8 +152,12 @@ func (e *llmWpInfoExtractor) Extract(ctx context.Context, input string) (WpInfoE
 	}, nil
 }
 
-func (e *llmWpInfoExtractor) prompt() string {
-	return wpInfoExtractionPrompt + "\n当前时间：" + e.referenceNow().Format("2006-01-02 15:04:05")
+func (e *llmWpInfoExtractor) prompt(ctx context.Context) (string, error) {
+	prompt, err := e.promptStore.Get(ctx, PromptKeyWpInfoExtraction)
+	if err != nil {
+		return "", fmt.Errorf("load prompt %q: %w", PromptKeyWpInfoExtraction, err)
+	}
+	return prompt.Content + "\n当前时间：" + e.referenceNow().Format("2006-01-02 15:04:05"), nil
 }
 
 func (e *llmWpInfoExtractor) referenceNow() time.Time {
@@ -146,7 +189,18 @@ func normalizeWorkPermitTime(raw string, reference time.Time, fallbackDate *time
 }
 
 func parseAbsoluteDateTime(raw string, location *time.Location) (time.Time, bool) {
-	replacer := strings.NewReplacer("T", " ", "年", "/", "月", "/", "日", "", "时", ":", "点", ":", "分", ":", "秒", "", ".", "/", "：", ":")
+	replacer := strings.NewReplacer(
+		"T", " ",
+		"年", "/",
+		"月", "/",
+		"日", "",
+		"时", ":",
+		"点", ":",
+		"分", ":",
+		"秒", "",
+		".", "/",
+		"，", ":",
+	)
 	normalized := strings.TrimSpace(replacer.Replace(raw))
 	normalized = strings.ReplaceAll(normalized, "--", "-")
 	normalized = strings.ReplaceAll(normalized, " /", "/")
@@ -174,18 +228,28 @@ func parseRelativeDateTime(raw string, reference time.Time, fallbackDate *time.T
 	baseDate := time.Date(reference.Year(), reference.Month(), reference.Day(), 0, 0, 0, 0, reference.Location())
 
 	switch {
-	case strings.Contains(raw, "明天"), strings.Contains(raw, "明日"):
+	case strings.Contains(raw, "明天"), strings.Contains(raw, "明日"), strings.Contains(raw, "鏄庡ぉ"), strings.Contains(raw, "鏄庢棩"):
 		baseDate = baseDate.AddDate(0, 0, 1)
-	case strings.Contains(raw, "后天"):
+	case strings.Contains(raw, "后天"), strings.Contains(raw, "鍚庡ぉ"):
 		baseDate = baseDate.AddDate(0, 0, 2)
-	case strings.Contains(raw, "今天"), strings.Contains(raw, "今日"):
+	case strings.Contains(raw, "今天"), strings.Contains(raw, "今日"), strings.Contains(raw, "浠婂ぉ"), strings.Contains(raw, "浠婃棩"):
 	default:
 		if fallbackDate != nil {
 			baseDate = time.Date(fallbackDate.Year(), fallbackDate.Month(), fallbackDate.Day(), 0, 0, 0, 0, fallbackDate.Location())
 		}
 	}
 
-	clockRaw := strings.NewReplacer("今天", "", "今日", "", "明天", "", "明日", "", "后天", "").Replace(raw)
+	clockRaw := strings.NewReplacer(
+		"今天", "", "今日", "", "明天", "", "明日", "", "后天", "",
+		"浠婂ぉ", "", "浠婃棩", "", "鏄庡ぉ", "", "鏄庢棩", "", "鍚庡ぉ", "",
+	).Replace(raw)
+	clockRaw = strings.NewReplacer(
+		"鐐", "点",
+		"鏃", "时",
+		"鍒", "分",
+		"绉", "秒",
+		"?", "",
+	).Replace(clockRaw)
 	hour, minute, second, ok := parseClock(clockRaw)
 	if !ok {
 		return time.Time{}, false

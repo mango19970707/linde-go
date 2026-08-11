@@ -3,7 +3,9 @@ package graph
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -50,11 +52,60 @@ type structuredMemorySample struct {
 }
 
 type wpFillLLMHelper struct {
-	chatModel model.BaseChatModel
+	chatModel   model.BaseChatModel
+	promptStore PromptStore
 }
 
-func newFillWpsNode(chatModel model.BaseChatModel, memoryStore StructuredMemoryStore, fillRules WpFillRules) func(context.Context, *WpGraphState) (*WpGraphState, error) {
-	helper := wpFillLLMHelper{chatModel: chatModel}
+func newFillWpsNode(chatModel model.BaseChatModel, args ...any) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+	promptStore := newDefaultPromptStore()
+	var memoryStore StructuredMemoryStore
+	var fillRules WpFillRules
+
+	switch len(args) {
+	case 2:
+		store, ok := args[0].(StructuredMemoryStore)
+		if !ok {
+			return func(context.Context, *WpGraphState) (*WpGraphState, error) {
+				return nil, fmt.Errorf("structured memory store has invalid type %T", args[0])
+			}
+		}
+		rules, ok := args[1].(WpFillRules)
+		if !ok {
+			return func(context.Context, *WpGraphState) (*WpGraphState, error) {
+				return nil, fmt.Errorf("fill rules has invalid type %T", args[1])
+			}
+		}
+		memoryStore = store
+		fillRules = rules
+	case 3:
+		store, ok := args[0].(PromptStore)
+		if !ok {
+			return func(context.Context, *WpGraphState) (*WpGraphState, error) {
+				return nil, fmt.Errorf("prompt store has invalid type %T", args[0])
+			}
+		}
+		memory, ok := args[1].(StructuredMemoryStore)
+		if !ok {
+			return func(context.Context, *WpGraphState) (*WpGraphState, error) {
+				return nil, fmt.Errorf("structured memory store has invalid type %T", args[1])
+			}
+		}
+		rules, ok := args[2].(WpFillRules)
+		if !ok {
+			return func(context.Context, *WpGraphState) (*WpGraphState, error) {
+				return nil, fmt.Errorf("fill rules has invalid type %T", args[2])
+			}
+		}
+		promptStore = store
+		memoryStore = memory
+		fillRules = rules
+	default:
+		return func(context.Context, *WpGraphState) (*WpGraphState, error) {
+			return nil, fmt.Errorf("unexpected fill node argument count %d", len(args))
+		}
+	}
+
+	helper := wpFillLLMHelper{chatModel: chatModel, promptStore: promptStore}
 	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
 		if chatModel == nil {
 			return nil, fmt.Errorf("chat model is nil")
@@ -117,7 +168,9 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 		}
 		selectedArea, confidence, err := helper.selectClosestArea(ctx, template, state, candidateAreas)
 		if err != nil {
-			return FilledWp{}, fmt.Errorf("select closest area for template %d: %w", template.ID, err)
+			if !isRecoverableLLMEnrichmentError(ctx, err) {
+				return FilledWp{}, fmt.Errorf("select closest area for template %d: %w", template.ID, err)
+			}
 		}
 		if strings.TrimSpace(selectedArea) != "" && confidence >= locationGuessMinConfidence {
 			guessedEntries, err := memoryStore.FindByTypeAndArea(ctx, template.WpTypeID, selectedArea)
@@ -138,9 +191,12 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 		historySamples := buildStructuredMemorySamples(historyEntries)
 		fallbackValues, err := helper.fillFields(ctx, template, state, fieldsByPath, requiredPaths, historySamples)
 		if err != nil {
-			return FilledWp{}, fmt.Errorf("fill required fields with llm for template %d: %w", template.ID, err)
+			if !isRecoverableLLMEnrichmentError(ctx, err) {
+				return FilledWp{}, fmt.Errorf("fill required fields with llm for template %d: %w", template.ID, err)
+			}
+		} else {
+			applyResolvedValues(fieldsByPath, fallbackValues, llmFallbackSource, &filledFields, filledPathSet)
 		}
-		applyResolvedValues(fieldsByPath, fallbackValues, llmFallbackSource, &filledFields, filledPathSet)
 	}
 
 	return FilledWp{
@@ -348,11 +404,13 @@ func (h wpFillLLMHelper) selectClosestArea(ctx context.Context, template WpTempl
 		return "", 0, fmt.Errorf("marshal area selection payload: %w", err)
 	}
 
+	prompt, err := h.promptStore.Get(ctx, PromptKeyWpFillAreaSelection)
+	if err != nil {
+		return "", 0, fmt.Errorf("load prompt %q: %w", PromptKeyWpFillAreaSelection, err)
+	}
+
 	response, err := h.chatModel.Generate(ctx, []*schema.Message{
-		schema.SystemMessage(`你是作业票结构化记忆地点匹配器。请根据当前作业区域和作业描述，从候选地点列表中选出最可能对应的一个地点。
-只返回一个合法 JSON，不要返回 Markdown，不要解释。
-返回格式必须为：{"area":"","confidence":0.0,"reason":""}
-如果无法可靠判断，请把 area 设为空字符串，并把 confidence 设为 0。`),
+		schema.SystemMessage(prompt.Content),
 		schema.UserMessage(string(payload)),
 	})
 	if err != nil {
@@ -400,11 +458,13 @@ func (h wpFillLLMHelper) fillFields(ctx context.Context, template WpTemplate, st
 		return nil, fmt.Errorf("marshal llm fill payload: %w", err)
 	}
 
+	prompt, err := h.promptStore.Get(ctx, PromptKeyWpFillFieldCompletion)
+	if err != nil {
+		return nil, fmt.Errorf("load prompt %q: %w", PromptKeyWpFillFieldCompletion, err)
+	}
+
 	response, err := h.chatModel.Generate(ctx, []*schema.Message{
-		schema.SystemMessage(`你是作业票字段补全器。你需要根据当前作业描述、作业区域和同类型历史样本，为尚未填充的必填字段补值。
-只允许返回字段路径到字段值的映射，不要返回整张作业票，不要返回 Markdown，不要解释。
-你必须优先参考同类型且作业内容相似的历史样本；如果样本不足，再根据当前作业描述谨慎推断。
-返回格式必须为：{"fields":{"路径1":"值1","路径2":["值2"]}}`),
+		schema.SystemMessage(prompt.Content),
 		schema.UserMessage(string(payload)),
 	})
 	if err != nil {
@@ -557,4 +617,42 @@ func joinPath(base, next string) string {
 		return next
 	}
 	return base + "." + next
+}
+
+func isRecoverableLLMEnrichmentError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if isLLMTimeoutError(ctx, err) {
+		return true
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	var unmarshalTypeErr *json.UnmarshalTypeError
+	if errors.As(err, &unmarshalTypeErr) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "unexpected end of JSON input") ||
+		strings.Contains(message, "response is empty")
+}
+
+func isLLMTimeoutError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil && !errors.Is(err, ctx.Err()) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	if os.IsTimeout(err) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "Client.Timeout exceeded") ||
+		strings.Contains(message, "context deadline exceeded")
 }

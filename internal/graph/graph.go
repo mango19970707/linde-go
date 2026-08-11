@@ -98,15 +98,15 @@ type WpTypeRecognizer interface {
 }
 
 type StructuredMemoryEntry struct {
-	WpTypeID        int    `json:"wp_type_id"`       // 作业票类型ID
-	WpTypeName      string `json:"wp_type_name"`     // 作业票类型名称
-	Area            string `json:"area"`             // 作业地点名称
-	WorkDescription string `json:"work_description"` // 作业描述
-
-	FieldName  string `json:"field_name"`  // 字段在模板中的json路径
-	FieldValue any    `json:"field_value"` // 字段值
-	Source     string `json:"source"`      // 来源文件
-	UpdatedAt  int64  `json:"updated_at"`  // 更新时间
+	WpTypeID         int    `json:"wp_type_id"`        // 作业票类型ID
+	WpTypeName       string `json:"wp_type_name"`      // 作业票类型名称
+	Area             string `json:"area"`              // 作业地点名称
+	WorkDescription  string `json:"work_description"`  // 作业描述
+	FieldDescription string `json:"field_description"` // 字段描述
+	FieldName        string `json:"field_name"`        // 字段在模板中的json路径
+	FieldValue       any    `json:"field_value"`       // 字段值
+	Source           string `json:"source"`            // 来源文件
+	UpdatedAt        int64  `json:"updated_at"`        // 更新时间
 }
 
 type StructuredMemoryStore interface {
@@ -284,7 +284,84 @@ func routeAfterFilledWpsValidation(ctx context.Context, state *WpGraphState) (st
 }
 
 // BuildWpGraph builds the intelligent work permit filling graph.
-func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, chatModel model.BaseChatModel, memoryStore StructuredMemoryStore, fillRules WpFillRules, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, graphOptions ...compose.GraphCompileOption) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool, recognizer WpTypeRecognizer, templateDetailTool einotool.InvokableTool, chatModel model.BaseChatModel, args ...any) (compose.Runnable[*WpGraphState, *WpGraphState], error) {
+	promptStore := newDefaultPromptStore()
+	var memoryStore StructuredMemoryStore
+	var fillRules WpFillRules
+	var updateWpInfoTool einotool.InvokableTool
+	var linkWpInfoTool einotool.InvokableTool
+	graphOptions := make([]compose.GraphCompileOption, 0)
+
+	switch {
+	case len(args) >= 4:
+		store, ok := args[0].(StructuredMemoryStore)
+		if !ok {
+			// try the new signature below
+		} else {
+			rules, ok := args[1].(WpFillRules)
+			if !ok {
+				return nil, fmt.Errorf("fill rules has invalid type %T", args[1])
+			}
+			updateTool, ok := args[2].(einotool.InvokableTool)
+			if !ok {
+				return nil, fmt.Errorf("update work permit tool has invalid type %T", args[2])
+			}
+			linkTool, ok := args[3].(einotool.InvokableTool)
+			if !ok {
+				return nil, fmt.Errorf("link work permit tool has invalid type %T", args[3])
+			}
+			memoryStore = store
+			fillRules = rules
+			updateWpInfoTool = updateTool
+			linkWpInfoTool = linkTool
+			for _, arg := range args[4:] {
+				option, ok := arg.(compose.GraphCompileOption)
+				if !ok {
+					return nil, fmt.Errorf("graph option has invalid type %T", arg)
+				}
+				graphOptions = append(graphOptions, option)
+			}
+			goto parsed
+		}
+		fallthrough
+	case len(args) >= 5:
+		store, ok := args[0].(PromptStore)
+		if !ok {
+			return nil, fmt.Errorf("prompt store has invalid type %T", args[0])
+		}
+		memory, ok := args[1].(StructuredMemoryStore)
+		if !ok {
+			return nil, fmt.Errorf("structured memory store has invalid type %T", args[1])
+		}
+		rules, ok := args[2].(WpFillRules)
+		if !ok {
+			return nil, fmt.Errorf("fill rules has invalid type %T", args[2])
+		}
+		updateTool, ok := args[3].(einotool.InvokableTool)
+		if !ok {
+			return nil, fmt.Errorf("update work permit tool has invalid type %T", args[3])
+		}
+		linkTool, ok := args[4].(einotool.InvokableTool)
+		if !ok {
+			return nil, fmt.Errorf("link work permit tool has invalid type %T", args[4])
+		}
+		promptStore = store
+		memoryStore = memory
+		fillRules = rules
+		updateWpInfoTool = updateTool
+		linkWpInfoTool = linkTool
+		for _, arg := range args[5:] {
+			option, ok := arg.(compose.GraphCompileOption)
+			if !ok {
+				return nil, fmt.Errorf("graph option has invalid type %T", arg)
+			}
+			graphOptions = append(graphOptions, option)
+		}
+	default:
+		return nil, fmt.Errorf("unexpected graph argument count %d", len(args))
+	}
+parsed:
+
 	if extractor == nil {
 		return nil, fmt.Errorf("wp info extractor is nil")
 	}
@@ -316,7 +393,7 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	graph.AddLambdaNode(nodeValidateWpInfo, compose.InvokableLambda(validateWpInfoNode))
 	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, recognizer)))
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
-	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(chatModel, memoryStore, fillRules)))
+	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(chatModel, promptStore, memoryStore, fillRules)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))
 	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(newSubmitWpsNode(updateWpInfoTool, linkWpInfoTool)))
 
