@@ -140,3 +140,42 @@ work_permit_api:
 		t.Fatalf("APIKey = %q", provider.APIKey)
 	}
 }
+
+func TestLoadResolvesStructuredMemorySQLiteDSNRelativeToConfigFile(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "configs")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(configDir, "config.yaml")
+
+	content := `chat_model:
+  provider: openai
+  providers:
+    openai:
+      api_key: test-key
+      base_url: https://openai.example.com
+      model: gpt-5.4
+work_permit_api:
+  base_url: http://127.0.0.1:8083
+  site_id: 28
+  user_id: 464
+  timeout: 15s
+structured_memory_db:
+  driver: sqlite
+  dsn: data/structured_memory.db
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	want := filepath.Join(dir, "data", "structured_memory.db")
+	if cfg.StructuredMemoryDB.DSN != want {
+		t.Fatalf("StructuredMemoryDB.DSN = %q, want %q", cfg.StructuredMemoryDB.DSN, want)
+	}
+}

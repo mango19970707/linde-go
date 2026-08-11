@@ -1,12 +1,12 @@
 ﻿chat_model:
   provider: openai
   defaults:
-    timeout: 30s
+    timeout: 300s
     max_tokens: 2048
     temperature: 0.7
   providers:
     openai:
-      api_key: ${OPENAI_API_KEY}
+      api_key: sk-e5a2cf9c95de4b628a35daa9975ef608
       base_url: https://llm-bc5kavcf69htcyy4.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
       model: qwen3.7-max
     azure_openai:
@@ -29,7 +29,7 @@ work_permit_api:
 
 structured_memory_db:
   driver: sqlite
-  dsn: data/structured_memory.db
+  dsn: D:\code\linde-go-v2\data\structured_memory.db
   # postgres 配置示例：
   # driver: pgx
   # dsn: postgres://postgres:password@127.0.0.1:5432/linde?sslmode=disable

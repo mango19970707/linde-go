@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -55,8 +56,42 @@ func Load(path string) (*AppConfig, error) {
 	if err := yaml.Unmarshal([]byte(os.ExpandEnv(string(data))), &cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config file %s: %w", path, err)
 	}
+	resolveRelativeStructuredMemoryDSN(path, &cfg)
 
 	return &cfg, nil
+}
+
+func resolveRelativeStructuredMemoryDSN(configPath string, cfg *AppConfig) {
+	if cfg == nil {
+		return
+	}
+
+	driver := strings.ToLower(strings.TrimSpace(cfg.StructuredMemoryDB.Driver))
+	dsn := strings.TrimSpace(cfg.StructuredMemoryDB.DSN)
+	if dsn == "" {
+		return
+	}
+	if driver == "pgx" || isAbsoluteOrNetworkDSN(dsn) {
+		return
+	}
+
+	configDir := filepath.Dir(configPath)
+	baseDir := configDir
+	if strings.EqualFold(filepath.Base(configDir), "configs") {
+		baseDir = filepath.Dir(configDir)
+	}
+	cfg.StructuredMemoryDB.DSN = filepath.Join(baseDir, dsn)
+}
+
+func isAbsoluteOrNetworkDSN(dsn string) bool {
+	if filepath.IsAbs(dsn) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(dsn))
+	return strings.HasPrefix(lower, "file:") ||
+		strings.HasPrefix(lower, "postgres://") ||
+		strings.HasPrefix(lower, "postgresql://") ||
+		strings.Contains(lower, "host=")
 }
 
 func (c *AppConfig) GetChatProviderConfig(provider string) (ModelProviderConfig, error) {
