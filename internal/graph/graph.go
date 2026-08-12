@@ -113,6 +113,7 @@ type StructuredMemoryStore interface {
 	FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]StructuredMemoryEntry, error)
 	ListAreasByType(ctx context.Context, wpTypeID int) ([]string, error)
 	FindByType(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error)
+	Upsert(ctx context.Context, entry StructuredMemoryEntry) error
 }
 
 type SubmitWpsApproval struct {
@@ -395,7 +396,7 @@ parsed:
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
 	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(chatModel, promptStore, memoryStore, fillRules)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))
-	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(newSubmitWpsNode(updateWpInfoTool, linkWpInfoTool)))
+	graph.AddLambdaNode(nodeSubmitWps, compose.InvokableLambda(newSubmitWpsNode(memoryStore, updateWpInfoTool, linkWpInfoTool)))
 
 	graph.AddEdge(compose.START, nodeAskWpInfo)
 	graph.AddEdge(nodeAskWpInfo, nodeValidateWpInfo)

@@ -76,6 +76,9 @@ func (s SQLStructuredMemoryStore) ensureSchema(ctx context.Context) error {
 
 	for _, statement := range schemaStatementsByDialect(s.dialect) {
 		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			if isIgnorableSchemaError(err, statement) {
+				continue
+			}
 			return fmt.Errorf("ensure structured memory schema: %w", err)
 		}
 	}
@@ -84,7 +87,7 @@ func (s SQLStructuredMemoryStore) ensureSchema(ctx context.Context) error {
 
 func (s SQLStructuredMemoryStore) FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]StructuredMemoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx, s.rebind(`
-SELECT wp_type_id, wp_type_name, area, work_description, field_name, field_value_json, source, updated_at
+SELECT wp_type_id, wp_type_name, area, work_description, field_description, field_name, field_value_json, source, updated_at
 FROM structured_memory_entries
 WHERE wp_type_id = ? AND area = ?
 ORDER BY updated_at DESC, field_name ASC
@@ -125,7 +128,7 @@ ORDER BY area ASC
 
 func (s SQLStructuredMemoryStore) FindByType(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error) {
 	rows, err := s.db.QueryContext(ctx, s.rebind(`
-SELECT wp_type_id, wp_type_name, area, work_description, field_name, field_value_json, source, updated_at
+SELECT wp_type_id, wp_type_name, area, work_description, field_description, field_name, field_value_json, source, updated_at
 FROM structured_memory_entries
 WHERE wp_type_id = ?
 ORDER BY updated_at DESC, area ASC, field_name ASC
@@ -148,6 +151,7 @@ func scanStructuredMemoryEntries(rows *sql.Rows) ([]StructuredMemoryEntry, error
 			&entry.WpTypeName,
 			&entry.Area,
 			&entry.WorkDescription,
+			&entry.FieldDescription,
 			&entry.FieldName,
 			&fieldValueJSON,
 			&entry.Source,
@@ -166,6 +170,51 @@ func scanStructuredMemoryEntries(rows *sql.Rows) ([]StructuredMemoryEntry, error
 	return entries, nil
 }
 
+func (s SQLStructuredMemoryStore) Upsert(ctx context.Context, entry StructuredMemoryEntry) error {
+	if s.db == nil {
+		return fmt.Errorf("structured memory db is nil")
+	}
+
+	fieldValueJSON, err := json.Marshal(entry.FieldValue)
+	if err != nil {
+		return fmt.Errorf("encode structured memory field value: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, s.rebind(`
+INSERT INTO structured_memory_entries (
+	wp_type_id,
+	wp_type_name,
+	area,
+	work_description,
+	field_description,
+	field_name,
+	field_value_json,
+	source,
+	updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(wp_type_id, area, source, field_name) DO UPDATE SET
+	wp_type_name = excluded.wp_type_name,
+	work_description = excluded.work_description,
+	field_description = excluded.field_description,
+	field_value_json = excluded.field_value_json,
+	updated_at = excluded.updated_at
+`),
+		entry.WpTypeID,
+		entry.WpTypeName,
+		entry.Area,
+		entry.WorkDescription,
+		entry.FieldDescription,
+		entry.FieldName,
+		string(fieldValueJSON),
+		entry.Source,
+		entry.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert structured memory entry %q: %w", entry.FieldName, err)
+	}
+	return nil
+}
+
 func schemaStatementsByDialect(dialect string) []string {
 	if dialect == "pgx" {
 		return []string{
@@ -174,12 +223,14 @@ func schemaStatementsByDialect(dialect string) []string {
 				wp_type_name TEXT NOT NULL DEFAULT '',
 				area TEXT NOT NULL DEFAULT '',
 				work_description TEXT NOT NULL DEFAULT '',
+				field_description TEXT NOT NULL DEFAULT '',
 				field_name TEXT NOT NULL,
 				field_value_json TEXT NOT NULL,
 				source TEXT NOT NULL,
 				updated_at BIGINT NOT NULL,
 				PRIMARY KEY (wp_type_id, area, source, field_name)
 			)`,
+			`ALTER TABLE structured_memory_entries ADD COLUMN IF NOT EXISTS field_description TEXT NOT NULL DEFAULT ''`,
 			`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_area ON structured_memory_entries (wp_type_id, area)`,
 			`CREATE INDEX IF NOT EXISTS idx_structured_memory_type ON structured_memory_entries (wp_type_id)`,
 			`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_updated_at ON structured_memory_entries (wp_type_id, updated_at)`,
@@ -192,12 +243,14 @@ func schemaStatementsByDialect(dialect string) []string {
 			wp_type_name TEXT NOT NULL DEFAULT '',
 			area TEXT NOT NULL DEFAULT '',
 			work_description TEXT NOT NULL DEFAULT '',
+			field_description TEXT NOT NULL DEFAULT '',
 			field_name TEXT NOT NULL,
 			field_value_json TEXT NOT NULL,
 			source TEXT NOT NULL,
 			updated_at INTEGER NOT NULL,
 			PRIMARY KEY (wp_type_id, area, source, field_name)
 		)`,
+		`ALTER TABLE structured_memory_entries ADD COLUMN field_description TEXT NOT NULL DEFAULT ''`,
 		`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_area ON structured_memory_entries (wp_type_id, area)`,
 		`CREATE INDEX IF NOT EXISTS idx_structured_memory_type ON structured_memory_entries (wp_type_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_updated_at ON structured_memory_entries (wp_type_id, updated_at)`,
@@ -207,6 +260,15 @@ func schemaStatementsByDialect(dialect string) []string {
 func isPostgresDSN(dsn string) bool {
 	lower := strings.ToLower(strings.TrimSpace(dsn))
 	return strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") || strings.Contains(lower, "host=")
+}
+
+func isIgnorableSchemaError(err error, statement string) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	stmt := strings.ToLower(strings.TrimSpace(statement))
+	return strings.HasPrefix(stmt, "alter table") && strings.Contains(message, "duplicate column")
 }
 
 func (s SQLStructuredMemoryStore) rebind(query string) string {

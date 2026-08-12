@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -145,9 +146,142 @@ func TestWorkPermitHandlerResumesApprovalWithFullPayloads(t *testing.T) {
 	}
 }
 
+type recordingStructuredMemoryStore struct {
+	entries []graph.StructuredMemoryEntry
+	err     error
+}
+
+func (s *recordingStructuredMemoryStore) FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]graph.StructuredMemoryEntry, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	result := make([]graph.StructuredMemoryEntry, 0)
+	for _, entry := range s.entries {
+		if entry.WpTypeID == wpTypeID && strings.TrimSpace(entry.Area) == strings.TrimSpace(area) {
+			result = append(result, entry)
+		}
+	}
+	return result, nil
+}
+
+func (s *recordingStructuredMemoryStore) ListAreasByType(ctx context.Context, wpTypeID int) ([]string, error) {
+	return nil, s.err
+}
+
+func (s *recordingStructuredMemoryStore) FindByType(ctx context.Context, wpTypeID int) ([]graph.StructuredMemoryEntry, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	result := make([]graph.StructuredMemoryEntry, 0)
+	for _, entry := range s.entries {
+		if entry.WpTypeID == wpTypeID {
+			result = append(result, entry)
+		}
+	}
+	return result, nil
+}
+
+func (s *recordingStructuredMemoryStore) Upsert(ctx context.Context, entry graph.StructuredMemoryEntry) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.entries = append(s.entries, entry)
+	return nil
+}
+
+func TestStructuredMemoryImportHandlerPersistsPayloads(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingStructuredMemoryStore{}
+	server := NewWorkPermitServer(nil, nil, store, 28, 464)
+
+	rec := postJSONTo(server, "/api/structured-memory/import", `{"payloads":[{"wptempletid":172,"wptypeid":2,"wptypename":"一级动火","sqxx":[{"name":"wpname","label":"作业名称","type":"input","value":"空分东侧动火"},{"name":"discription","label":"作业内容描述","type":"input","value":"焊接支架"},{"name":"areaid","label":"所属区域","type":"selector","value":[{"id":1,"name":"空分东侧"}]}]}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Status       string `json:"status"`
+		ImportedWps  int    `json:"imported_wps"`
+		ImportedRows int    `json:"imported_rows"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "completed" {
+		t.Fatalf("status = %q", response.Status)
+	}
+	if response.ImportedWps != 1 {
+		t.Fatalf("imported_wps = %d", response.ImportedWps)
+	}
+	if response.ImportedRows == 0 {
+		t.Fatalf("imported_rows = %d", response.ImportedRows)
+	}
+	if len(store.entries) == 0 {
+		t.Fatal("expected structured memory entries")
+	}
+	if store.entries[0].Source == "" {
+		t.Fatal("expected import source to be generated")
+	}
+}
+
+func TestStructuredMemoryExportHandlerReturnsPayloadsByTypeAndArea(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingStructuredMemoryStore{
+		entries: []graph.StructuredMemoryEntry{
+			{WpTypeID: 2, WpTypeName: "一级动火", Area: "空分东侧", WorkDescription: "焊接支架", FieldDescription: "作业名称", FieldName: "sqxx.0.value", FieldValue: "空分东侧动火", Source: "import-1", UpdatedAt: 1},
+			{WpTypeID: 2, WpTypeName: "一级动火", Area: "空分东侧", WorkDescription: "焊接支架", FieldDescription: "作业内容描述", FieldName: "sqxx.1.value", FieldValue: "焊接支架", Source: "import-1", UpdatedAt: 1},
+			{WpTypeID: 2, WpTypeName: "一级动火", Area: "空分东侧", WorkDescription: "焊接支架", FieldDescription: "所属区域", FieldName: "sqxx.2.value", FieldValue: []any{map[string]any{"id": 1, "name": "空分东侧"}}, Source: "import-1", UpdatedAt: 1},
+		},
+	}
+	server := NewWorkPermitServer(nil, nil, store, 28, 464)
+
+	values := url.Values{}
+	values.Set("wp_type_id", "2")
+	values.Set("area", "空分东侧")
+	rec := get(server, "/api/structured-memory/export?"+values.Encode())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	var response struct {
+		Status   string           `json:"status"`
+		Payloads []map[string]any `json:"payloads"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Status != "completed" {
+		t.Fatalf("status = %q", response.Status)
+	}
+	if len(response.Payloads) != 1 {
+		t.Fatalf("payloads = %#v", response.Payloads)
+	}
+	sqxx, ok := response.Payloads[0]["sqxx"].([]any)
+	if !ok || len(sqxx) != 3 {
+		t.Fatalf("sqxx = %#v", response.Payloads[0]["sqxx"])
+	}
+}
+
 func postJSON(server *WorkPermitServer, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/api/work-permits", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	return rec
+}
+
+func postJSONTo(server *WorkPermitServer, target, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server.Router().ServeHTTP(rec, req)
+	return rec
+}
+
+func get(server *WorkPermitServer, target string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(http.MethodGet, target, nil)
 	rec := httptest.NewRecorder()
 	server.Router().ServeHTTP(rec, req)
 	return rec

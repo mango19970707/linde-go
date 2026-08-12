@@ -560,6 +560,35 @@ func (s stubStructuredMemoryStore) FindByType(ctx context.Context, wpTypeID int)
 	return s.entries, s.err
 }
 
+func (s stubStructuredMemoryStore) Upsert(ctx context.Context, entry StructuredMemoryEntry) error {
+	return s.err
+}
+
+type recordingStructuredMemoryStore struct {
+	entries []StructuredMemoryEntry
+	err     error
+}
+
+func (s *recordingStructuredMemoryStore) FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]StructuredMemoryEntry, error) {
+	return nil, s.err
+}
+
+func (s *recordingStructuredMemoryStore) ListAreasByType(ctx context.Context, wpTypeID int) ([]string, error) {
+	return nil, s.err
+}
+
+func (s *recordingStructuredMemoryStore) FindByType(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error) {
+	return nil, s.err
+}
+
+func (s *recordingStructuredMemoryStore) Upsert(ctx context.Context, entry StructuredMemoryEntry) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.entries = append(s.entries, entry)
+	return nil
+}
+
 func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 	t.Parallel()
 
@@ -776,7 +805,7 @@ func TestSubmitWpsNodeSubmitsApprovedFullPayloads(t *testing.T) {
 
 	updateTool := &recordingUpdateWpInfoTool{}
 	linkTool := &recordingLinkWpInfoTool{}
-	err := submitApprovedWps(context.Background(), updateTool, linkTool, 23, SubmitWpsApproval{
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, stubStructuredMemoryStore{}, nil, 23, SubmitWpsApproval{
 		Approved: true,
 		Payloads: []map[string]any{{"id": 0, "wptempletid": 243, "wptypeid": 23}},
 	})
@@ -796,7 +825,7 @@ func TestSubmitWpsNodeLinksChildrenToPermitParent(t *testing.T) {
 
 	updateTool := &recordingUpdateWpInfoTool{ids: []int{91001, 91002, 91003}}
 	linkTool := &recordingLinkWpInfoTool{}
-	err := submitApprovedWps(context.Background(), updateTool, linkTool, 23, SubmitWpsApproval{
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, stubStructuredMemoryStore{}, nil, 23, SubmitWpsApproval{
 		Approved: true,
 		Payloads: []map[string]any{
 			{"id": 0, "wptempletid": 243, "wptypeid": 23},
@@ -818,10 +847,90 @@ func TestSubmitWpsNodeLinksChildrenToPermitParent(t *testing.T) {
 	}
 }
 
+func TestSubmitWpsNodePersistsStructuredMemoryFromApprovedPayloads(t *testing.T) {
+	t.Parallel()
+
+	updateTool := &recordingUpdateWpInfoTool{ids: []int{91001}}
+	linkTool := &recordingLinkWpInfoTool{}
+	memoryStore := &recordingStructuredMemoryStore{}
+	templates := []WpTemplate{
+		{
+			ID:         172,
+			WpTypeID:   2,
+			WpTypeName: "一级动火",
+			Name:       "一级动火",
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{"name": "wpname", "label": "作业名称", "type": "input", "value": ""},
+					map[string]any{"name": "discription", "label": "作业内容描述", "type": "input", "value": ""},
+					map[string]any{"name": "areaid", "label": "所属区域", "type": "selector", "value": []any{}},
+					map[string]any{"name": "wpplace", "label": "作业地点", "type": "input", "value": ""},
+					map[string]any{"name": "approvedby", "label": "审批人", "type": "selector", "value": []any{}},
+				},
+			},
+		},
+	}
+
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, memoryStore, templates, 2, SubmitWpsApproval{
+		Approved: true,
+		Payloads: []map[string]any{
+			{
+				"id":         0,
+				"wptempletid": 172,
+				"wptypeid":   2,
+				"wptypename": "一级动火",
+				"sqxx": []any{
+					map[string]any{"name": "wpname", "label": "作业名称", "type": "input", "value": "空分东侧动火"},
+					map[string]any{"name": "discription", "label": "作业内容描述", "type": "input", "value": "焊接支架"},
+					map[string]any{"name": "areaid", "label": "所属区域", "type": "selector", "value": []any{map[string]any{"id": 1, "name": "空分东侧"}}},
+					map[string]any{"name": "wpplace", "label": "作业地点", "type": "input", "value": "冷箱平台"},
+					map[string]any{"name": "approvedby", "label": "审批人", "type": "selector", "value": []any{map[string]any{"id": 7, "name": "张三"}}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("submitApprovedWps() error = %v", err)
+	}
+	if len(memoryStore.entries) == 0 {
+		t.Fatal("expected structured memory entries to be persisted")
+	}
+
+	byField := make(map[string]StructuredMemoryEntry, len(memoryStore.entries))
+	for _, entry := range memoryStore.entries {
+		byField[entry.FieldName] = entry
+		if entry.Source != "91001" {
+			t.Fatalf("entry source = %q, want %q", entry.Source, "91001")
+		}
+		if entry.WpTypeID != 2 {
+			t.Fatalf("entry wp_type_id = %d", entry.WpTypeID)
+		}
+		if entry.WpTypeName != "一级动火" {
+			t.Fatalf("entry wp_type_name = %q", entry.WpTypeName)
+		}
+		if entry.Area != "空分东侧" {
+			t.Fatalf("entry area = %q", entry.Area)
+		}
+		if entry.WorkDescription != "焊接支架" {
+			t.Fatalf("entry work_description = %q", entry.WorkDescription)
+		}
+	}
+
+	if got := byField["sqxx.0.value"].FieldDescription; got != "作业名称" {
+		t.Fatalf("sqxx.0.value description = %q", got)
+	}
+	if got := byField["sqxx.3.value"].FieldDescription; got != "作业地点" {
+		t.Fatalf("sqxx.3.value description = %q", got)
+	}
+	if got := byField["sqxx.4.value"].FieldDescription; got != "审批人" {
+		t.Fatalf("sqxx.4.value description = %q", got)
+	}
+}
+
 func TestSubmitWpsNodeInterruptsBeforeSubmission(t *testing.T) {
 	t.Parallel()
 
-	node := newSubmitWpsNode(&recordingUpdateWpInfoTool{}, &recordingLinkWpInfoTool{})
+	node := newSubmitWpsNode(stubStructuredMemoryStore{}, &recordingUpdateWpInfoTool{}, &recordingLinkWpInfoTool{})
 	state := &WpGraphState{
 		FilledWps: []FilledWp{{WpType: "PTW800作业票", Name: "作业许可证", Content: map[string]any{"wptypeid": 23}}},
 	}

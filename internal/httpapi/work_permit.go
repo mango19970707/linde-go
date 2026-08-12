@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -24,6 +25,11 @@ type workPermitRequest struct {
 	Input     string           `json:"input"`
 	Approved  *bool            `json:"approved,omitempty"`
 	Payloads  []map[string]any `json:"payloads,omitempty"`
+}
+
+type structuredMemoryImportRequest struct {
+	Source   string           `json:"source"`
+	Payloads []map[string]any `json:"payloads"`
 }
 
 type workPermitResponse struct {
@@ -44,6 +50,7 @@ type sessionState struct {
 type WorkPermitServer struct {
 	runner      WorkPermitRunner
 	promptStore graph.PromptStore
+	memoryStore graph.StructuredMemoryStore
 	siteID      int
 	userID      int
 
@@ -53,6 +60,7 @@ type WorkPermitServer struct {
 
 func NewWorkPermitServer(runner WorkPermitRunner, args ...any) *WorkPermitServer {
 	var promptStore graph.PromptStore
+	var memoryStore graph.StructuredMemoryStore
 	var siteID int
 	var userID int
 
@@ -64,11 +72,17 @@ func NewWorkPermitServer(runner WorkPermitRunner, args ...any) *WorkPermitServer
 		promptStore, _ = args[0].(graph.PromptStore)
 		siteID, _ = args[1].(int)
 		userID, _ = args[2].(int)
+	case 4:
+		promptStore, _ = args[0].(graph.PromptStore)
+		memoryStore, _ = args[1].(graph.StructuredMemoryStore)
+		siteID, _ = args[2].(int)
+		userID, _ = args[3].(int)
 	}
 
 	return &WorkPermitServer{
 		runner:      runner,
 		promptStore: promptStore,
+		memoryStore: memoryStore,
 		siteID:      siteID,
 		userID:      userID,
 		sessions:    make(map[string]sessionState),
@@ -79,6 +93,8 @@ func (s *WorkPermitServer) Router() http.Handler {
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.POST("/api/work-permits", s.handleCreateWorkPermit)
+	router.POST("/api/structured-memory/import", s.handleImportStructuredMemory)
+	router.GET("/api/structured-memory/export", s.handleExportStructuredMemory)
 	router.GET("/api/prompts", s.handleListPrompts)
 	router.GET("/api/prompts/:key", s.handleGetPrompt)
 	router.PUT("/api/prompts/:key", s.handleUpdatePrompt)
@@ -104,6 +120,70 @@ func (s *WorkPermitServer) handleCreateWorkPermit(c *gin.Context) {
 		return
 	}
 	s.handleResumeRequest(c, request)
+}
+
+func (s *WorkPermitServer) handleImportStructuredMemory(c *gin.Context) {
+	if s.memoryStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "structured memory store is nil"})
+		return
+	}
+
+	var request structuredMemoryImportRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body"})
+		return
+	}
+	if len(request.Payloads) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "payloads are required"})
+		return
+	}
+
+	importedRows, err := graph.ImportStructuredMemoryPayloads(c.Request.Context(), s.memoryStore, request.Payloads, strings.TrimSpace(request.Source))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":        "completed",
+		"imported_wps":  len(request.Payloads),
+		"imported_rows": importedRows,
+	})
+}
+
+func (s *WorkPermitServer) handleExportStructuredMemory(c *gin.Context) {
+	if s.memoryStore == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "structured memory store is nil"})
+		return
+	}
+
+	wpTypeIDValue := strings.TrimSpace(c.Query("wp_type_id"))
+	area := strings.TrimSpace(c.Query("area"))
+	if wpTypeIDValue == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wp_type_id is required"})
+		return
+	}
+	if area == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "area is required"})
+		return
+	}
+
+	wpTypeID, err := strconv.Atoi(wpTypeIDValue)
+	if err != nil || wpTypeID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "wp_type_id must be a positive integer"})
+		return
+	}
+
+	payloads, err := graph.ExportStructuredMemoryPayloads(c.Request.Context(), s.memoryStore, wpTypeID, area)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":   "completed",
+		"payloads": payloads,
+	})
 }
 
 func (s *WorkPermitServer) handleInitialRequest(c *gin.Context, request workPermitRequest) {
