@@ -115,6 +115,64 @@ func TestWorkPermitHandlerReturnsApprovalPreview(t *testing.T) {
 	}
 }
 
+func TestWorkPermitHandlerReturnsWpTypeConfirmation(t *testing.T) {
+	runner := &recordingRunner{}
+	interruptErr := newInterruptError(t, map[string]any{
+		"operation": "confirm_wp_types",
+		"question":  "confirm permit types",
+		"intent_wp_types": []graph.WpMetaInfo{
+			{Id: 243, TemplateName: "permit", WpTypeName: "PTW800", WpTypeId: 23},
+		},
+	})
+	runner.call = func(ctx context.Context, input *graph.WpGraphState, opts ...compose.Option) (*graph.WpGraphState, error) {
+		return nil, interruptErr
+	}
+
+	server := NewWorkPermitServer(runner, nil, 28, 464)
+	rec := postJSON(server, `{"input":"complete work description"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	response := decodeResponse(t, rec)
+	if response.Status != "need_wp_type_confirmation" {
+		t.Fatalf("status = %q", response.Status)
+	}
+	if len(response.IntentWpTypes) != 1 || response.IntentWpTypes[0].WpTypeId != 23 {
+		t.Fatalf("intent_wp_types = %#v", response.IntentWpTypes)
+	}
+}
+
+func TestWorkPermitHandlerResumesWpTypeConfirmation(t *testing.T) {
+	runner := &recordingRunner{}
+	interruptErr := newInterruptError(t, map[string]any{
+		"operation": "confirm_wp_types",
+	})
+	callCount := 0
+	runner.call = func(ctx context.Context, input *graph.WpGraphState, opts ...compose.Option) (*graph.WpGraphState, error) {
+		callCount++
+		if callCount == 1 {
+			return nil, interruptErr
+		}
+		return &graph.WpGraphState{CurrentNode: "intentRecognition"}, nil
+	}
+
+	server := NewWorkPermitServer(runner, nil, 28, 464)
+	first := postJSON(server, `{"input":"complete work description"}`)
+	firstResponse := decodeResponse(t, first)
+
+	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","confirmed":true,"intent_wp_types":[{"id":243,"templetname":"permit","wptypename":"PTW800","wptypeid":23}]}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	response := decodeResponse(t, rec)
+	if response.Status != "completed" {
+		t.Fatalf("status = %q", response.Status)
+	}
+	if callCount != 2 {
+		t.Fatalf("callCount = %d", callCount)
+	}
+}
+
 func TestWorkPermitHandlerResumesApprovalWithFullPayloads(t *testing.T) {
 	runner := &recordingRunner{}
 	interruptErr := newInterruptError(t, map[string]any{
@@ -187,6 +245,14 @@ func (s *recordingStructuredMemoryStore) Upsert(ctx context.Context, entry graph
 	}
 	s.entries = append(s.entries, entry)
 	return nil
+}
+
+func (s *recordingStructuredMemoryStore) FindIntentMemoryBySite(ctx context.Context, siteID int) ([]graph.StructuredIntentMemoryEntry, error) {
+	return nil, s.err
+}
+
+func (s *recordingStructuredMemoryStore) UpsertIntentMemory(ctx context.Context, entry graph.StructuredIntentMemoryEntry) error {
+	return s.err
 }
 
 func TestStructuredMemoryImportHandlerPersistsPayloads(t *testing.T) {

@@ -209,6 +209,7 @@ func TestBuildWpGraphResumesAfterSupplementalInput(t *testing.T) {
 		WpFillRules{},
 		&recordingUpdateWpInfoTool{},
 		&recordingLinkWpInfoTool{},
+		false,
 		compose.WithCheckPointStore(store),
 		compose.WithGraphName("work-permit"),
 	)
@@ -297,6 +298,7 @@ func DisabledBuildWpGraphResumesApprovalAfterSubmitInterrupt(t *testing.T) {
 		WpFillRules{},
 		updateTool,
 		linkTool,
+		false,
 		compose.WithCheckPointStore(store),
 		compose.WithGraphName("work-permit"),
 	)
@@ -407,7 +409,18 @@ type stubWpTypeRecognizer struct {
 	err error
 }
 
-func (s stubWpTypeRecognizer) Recognize(ctx context.Context, description string, templates []WpMetaInfo) ([]int, error) {
+func (s stubWpTypeRecognizer) Recognize(ctx context.Context, description string, templates []WpMetaInfo, candidates []WpMetaInfo) ([]int, error) {
+	return s.ids, s.err
+}
+
+type recordingWpTypeRecognizer struct {
+	ids        []int
+	err        error
+	candidates []WpMetaInfo
+}
+
+func (s *recordingWpTypeRecognizer) Recognize(ctx context.Context, description string, templates []WpMetaInfo, candidates []WpMetaInfo) ([]int, error) {
+	s.candidates = append([]WpMetaInfo(nil), candidates...)
 	return s.ids, s.err
 }
 
@@ -433,7 +446,9 @@ func TestIntentRecognitionNodeSelectsTypesAndAlwaysIncludesPermit(t *testing.T) 
 	}
 	node := newIntentRecognitionNode(
 		stubWpTemplateTool{result: string(raw)},
+		stubStructuredMemoryStore{},
 		stubWpTypeRecognizer{ids: []int{1}},
+		false,
 	)
 
 	got, err := node(context.Background(), state)
@@ -452,18 +467,150 @@ func TestIntentRecognitionNodeSelectsTypesAndAlwaysIncludesPermit(t *testing.T) 
 	}
 }
 
+func TestIntentRecognitionNodeInterruptsForWpTypeConfirmation(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"success":true,"data":[{"id":243,"templetname":"作业许可证","wptypename":"PTW800","wptypeid":23}]}`
+	node := newIntentRecognitionNode(stubWpTemplateTool{result: raw}, stubStructuredMemoryStore{}, stubWpTypeRecognizer{ids: []int{23}})
+
+	_, err := node(context.Background(), &WpGraphState{Description: "hot work"})
+	if err == nil {
+		t.Fatal("newIntentRecognitionNode() error = nil")
+	}
+	if !strings.Contains(err.Error(), "confirm_wp_types") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestValidateWpTypeConfirmationAppliesEditedWpTypes(t *testing.T) {
+	t.Parallel()
+
+	templates := []WpMetaInfo{
+		{Id: 243, TemplateName: "作业许可证", WpTypeName: "PTW800", WpTypeId: 23},
+		{Id: 180, TemplateName: "临时用电", WpTypeName: "临时用电", WpTypeId: 9},
+	}
+
+	got, err := validateWpTypeConfirmation(templates, []WpMetaInfo{
+		{Id: 243, TemplateName: "作业许可证", WpTypeName: "PTW800", WpTypeId: 23},
+		{Id: 180, TemplateName: "临时用电", WpTypeName: "临时用电", WpTypeId: 9},
+	})
+	if err != nil {
+		t.Fatalf("validateWpTypeConfirmation() error = %v", err)
+	}
+	if len(got) != 2 || got[1].WpTypeId != 9 {
+		t.Fatalf("got = %#v", got)
+	}
+}
+
+func TestIntentRecognitionNodeCanSkipWpTypeConfirmation(t *testing.T) {
+	t.Parallel()
+
+	raw := `{"success":true,"data":[{"id":243,"templetname":"作业许可证","wptypename":"PTW800","wptypeid":23}]}`
+	node := newIntentRecognitionNode(stubWpTemplateTool{result: raw}, stubStructuredMemoryStore{}, stubWpTypeRecognizer{ids: []int{23}}, false)
+
+	got, err := node(context.Background(), &WpGraphState{Description: "hot work"})
+	if err != nil {
+		t.Fatalf("newIntentRecognitionNode() error = %v", err)
+	}
+	if got.CurrentNode != nodeIntentRecognition {
+		t.Fatalf("CurrentNode = %q", got.CurrentNode)
+	}
+}
+
 func TestIntentRecognitionNodeRejectsUnknownTypeID(t *testing.T) {
 	t.Parallel()
 
 	raw := `{"success":true,"data":[{"id":243,"templetname":"作业许可证","wptypename":"PTW800作业票","wptypeid":23}]}`
 	node := newIntentRecognitionNode(
 		stubWpTemplateTool{result: raw},
+		stubStructuredMemoryStore{},
 		stubWpTypeRecognizer{ids: []int{999}},
 	)
 
 	_, err := node(context.Background(), &WpGraphState{Description: "一般作业"})
 	if err == nil {
 		t.Fatalf("newIntentRecognitionNode() error = nil")
+	}
+}
+
+func TestFindIntentMemoryCandidatesAppliesThresholdAndTopN(t *testing.T) {
+	t.Parallel()
+
+	templates := []WpMetaInfo{
+		{Id: 243, TemplateName: "作业许可证", WpTypeName: "PTW800作业票", WpTypeId: 23},
+		{Id: 171, TemplateName: "特级动火", WpTypeName: "特级动火", WpTypeId: 1},
+		{Id: 180, TemplateName: "临时用电", WpTypeName: "临时用电", WpTypeId: 9},
+	}
+	store := stubStructuredMemoryStore{
+		intentEntries: []StructuredIntentMemoryEntry{
+			{SiteID: 28, Area: "空分装置", WorkDescription: "特级动火作业", WpTypeIDs: []int{1}, UpdatedAt: 2},
+			{SiteID: 28, Area: "空分装置", WorkDescription: "临时用电接线", WpTypeIDs: []int{9}, UpdatedAt: 1},
+		},
+	}
+
+	got, err := findIntentMemoryCandidates(
+		context.Background(),
+		store,
+		28,
+		"空分装置",
+		"特级动火作业，需要开票",
+		templates,
+		IntentMemoryRetrievalConfig{ScoreThreshold: 10, TopN: 1},
+	)
+	if err != nil {
+		t.Fatalf("findIntentMemoryCandidates() error = %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if got[0].WpTypeId != 1 {
+		t.Fatalf("got[0].WpTypeId = %d, want 1", got[0].WpTypeId)
+	}
+}
+
+func TestIntentRecognitionNodePassesFilteredCandidatesToRecognizer(t *testing.T) {
+	t.Parallel()
+
+	templates := []WpMetaInfo{
+		{Id: 243, TemplateName: "作业许可证", WpTypeName: "PTW800作业票", WpTypeId: 23},
+		{Id: 171, TemplateName: "特级动火", WpTypeName: "特级动火", WpTypeId: 1},
+		{Id: 180, TemplateName: "临时用电", WpTypeName: "临时用电", WpTypeId: 9},
+	}
+	raw, err := json.Marshal(map[string]any{
+		"success": true,
+		"data":    templates,
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	recognizer := &recordingWpTypeRecognizer{ids: []int{1}}
+	node := newIntentRecognitionNode(
+		stubWpTemplateTool{result: string(raw)},
+		stubStructuredMemoryStore{
+			intentEntries: []StructuredIntentMemoryEntry{
+				{SiteID: 28, Area: "空分装置", WorkDescription: "特级动火作业", WpTypeIDs: []int{1}, UpdatedAt: 2},
+				{SiteID: 28, Area: "空分装置", WorkDescription: "临时用电接线", WpTypeIDs: []int{9}, UpdatedAt: 1},
+			},
+		},
+		recognizer,
+		IntentMemoryRetrievalConfig{ScoreThreshold: 10, TopN: 1},
+		false,
+	)
+
+	_, err = node(context.Background(), &WpGraphState{
+		SiteID:      28,
+		Area:        "空分装置",
+		Description: "特级动火作业，需要开票",
+	})
+	if err != nil {
+		t.Fatalf("newIntentRecognitionNode() error = %v", err)
+	}
+	if len(recognizer.candidates) != 1 {
+		t.Fatalf("len(candidates) = %d, want 1", len(recognizer.candidates))
+	}
+	if recognizer.candidates[0].WpTypeId != 1 {
+		t.Fatalf("candidate WpTypeId = %d, want 1", recognizer.candidates[0].WpTypeId)
 	}
 }
 
@@ -516,8 +663,9 @@ func TestSearchWpTemplateNodeLoadsTemplatesByTemplateID(t *testing.T) {
 }
 
 type stubStructuredMemoryStore struct {
-	entries []StructuredMemoryEntry
-	err     error
+	entries       []StructuredMemoryEntry
+	intentEntries []StructuredIntentMemoryEntry
+	err           error
 }
 
 func (s stubStructuredMemoryStore) FindByTypeAndArea(ctx context.Context, wpTypeID int, area string) ([]StructuredMemoryEntry, error) {
@@ -564,6 +712,23 @@ func (s stubStructuredMemoryStore) Upsert(ctx context.Context, entry StructuredM
 	return s.err
 }
 
+func (s stubStructuredMemoryStore) FindIntentMemoryBySite(ctx context.Context, siteID int) ([]StructuredIntentMemoryEntry, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	entries := make([]StructuredIntentMemoryEntry, 0)
+	for _, entry := range s.intentEntries {
+		if entry.SiteID == siteID {
+			entries = append(entries, entry)
+		}
+	}
+	return entries, nil
+}
+
+func (s stubStructuredMemoryStore) UpsertIntentMemory(ctx context.Context, entry StructuredIntentMemoryEntry) error {
+	return s.err
+}
+
 type recordingStructuredMemoryStore struct {
 	entries []StructuredMemoryEntry
 	err     error
@@ -586,6 +751,17 @@ func (s *recordingStructuredMemoryStore) Upsert(ctx context.Context, entry Struc
 		return s.err
 	}
 	s.entries = append(s.entries, entry)
+	return nil
+}
+
+func (s *recordingStructuredMemoryStore) FindIntentMemoryBySite(ctx context.Context, siteID int) ([]StructuredIntentMemoryEntry, error) {
+	return nil, s.err
+}
+
+func (s *recordingStructuredMemoryStore) UpsertIntentMemory(ctx context.Context, entry StructuredIntentMemoryEntry) error {
+	if s.err != nil {
+		return s.err
+	}
 	return nil
 }
 
@@ -805,7 +981,7 @@ func TestSubmitWpsNodeSubmitsApprovedFullPayloads(t *testing.T) {
 
 	updateTool := &recordingUpdateWpInfoTool{}
 	linkTool := &recordingLinkWpInfoTool{}
-	err := submitApprovedWps(context.Background(), updateTool, linkTool, stubStructuredMemoryStore{}, nil, 23, SubmitWpsApproval{
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, stubStructuredMemoryStore{}, &WpGraphState{}, 23, SubmitWpsApproval{
 		Approved: true,
 		Payloads: []map[string]any{{"id": 0, "wptempletid": 243, "wptypeid": 23}},
 	})
@@ -825,7 +1001,7 @@ func TestSubmitWpsNodeLinksChildrenToPermitParent(t *testing.T) {
 
 	updateTool := &recordingUpdateWpInfoTool{ids: []int{91001, 91002, 91003}}
 	linkTool := &recordingLinkWpInfoTool{}
-	err := submitApprovedWps(context.Background(), updateTool, linkTool, stubStructuredMemoryStore{}, nil, 23, SubmitWpsApproval{
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, stubStructuredMemoryStore{}, &WpGraphState{}, 23, SubmitWpsApproval{
 		Approved: true,
 		Payloads: []map[string]any{
 			{"id": 0, "wptempletid": 243, "wptypeid": 23},
@@ -857,34 +1033,42 @@ func TestSubmitWpsNodePersistsStructuredMemoryFromApprovedPayloads(t *testing.T)
 		{
 			ID:         172,
 			WpTypeID:   2,
-			WpTypeName: "一级动火",
-			Name:       "一级动火",
+			WpTypeName: "????",
+			Name:       "????",
 			ApplyContentObject: map[string]any{
 				"sqxx": []any{
-					map[string]any{"name": "wpname", "label": "作业名称", "type": "input", "value": ""},
-					map[string]any{"name": "discription", "label": "作业内容描述", "type": "input", "value": ""},
-					map[string]any{"name": "areaid", "label": "所属区域", "type": "selector", "value": []any{}},
-					map[string]any{"name": "wpplace", "label": "作业地点", "type": "input", "value": ""},
-					map[string]any{"name": "approvedby", "label": "审批人", "type": "selector", "value": []any{}},
+					map[string]any{"name": "wpname", "label": "????", "type": "input", "value": ""},
+					map[string]any{"name": "discription", "label": "??????", "type": "input", "value": ""},
+					map[string]any{"name": "areaid", "label": "????", "type": "selector", "value": []any{}},
+					map[string]any{"name": "wpplace", "label": "????", "type": "input", "value": ""},
+					map[string]any{"name": "approvedby", "label": "???", "type": "selector", "value": []any{}},
 				},
 			},
 		},
 	}
 
-	err := submitApprovedWps(context.Background(), updateTool, linkTool, memoryStore, templates, 2, SubmitWpsApproval{
+	err := submitApprovedWps(context.Background(), updateTool, linkTool, memoryStore, &WpGraphState{
+		SiteID:      28,
+		Area:        "????",
+		Description: "????",
+		IntentWpTypes: []WpMetaInfo{
+			{WpTypeId: 2, WpTypeName: "????"},
+		},
+		WpTemplates: templates,
+	}, 2, SubmitWpsApproval{
 		Approved: true,
 		Payloads: []map[string]any{
 			{
-				"id":         0,
+				"id":          0,
 				"wptempletid": 172,
-				"wptypeid":   2,
-				"wptypename": "一级动火",
+				"wptypeid":    2,
+				"wptypename":  "????",
 				"sqxx": []any{
-					map[string]any{"name": "wpname", "label": "作业名称", "type": "input", "value": "空分东侧动火"},
-					map[string]any{"name": "discription", "label": "作业内容描述", "type": "input", "value": "焊接支架"},
-					map[string]any{"name": "areaid", "label": "所属区域", "type": "selector", "value": []any{map[string]any{"id": 1, "name": "空分东侧"}}},
-					map[string]any{"name": "wpplace", "label": "作业地点", "type": "input", "value": "冷箱平台"},
-					map[string]any{"name": "approvedby", "label": "审批人", "type": "selector", "value": []any{map[string]any{"id": 7, "name": "张三"}}},
+					map[string]any{"name": "wpname", "label": "????", "type": "input", "value": "??????"},
+					map[string]any{"name": "discription", "label": "??????", "type": "input", "value": "????"},
+					map[string]any{"name": "areaid", "label": "????", "type": "selector", "value": []any{map[string]any{"id": 1, "name": "????"}}},
+					map[string]any{"name": "wpplace", "label": "????", "type": "input", "value": "????"},
+					map[string]any{"name": "approvedby", "label": "???", "type": "selector", "value": []any{map[string]any{"id": 7, "name": "??"}}},
 				},
 			},
 		},
@@ -905,24 +1089,24 @@ func TestSubmitWpsNodePersistsStructuredMemoryFromApprovedPayloads(t *testing.T)
 		if entry.WpTypeID != 2 {
 			t.Fatalf("entry wp_type_id = %d", entry.WpTypeID)
 		}
-		if entry.WpTypeName != "一级动火" {
+		if entry.WpTypeName != "????" {
 			t.Fatalf("entry wp_type_name = %q", entry.WpTypeName)
 		}
-		if entry.Area != "空分东侧" {
+		if entry.Area != "????" {
 			t.Fatalf("entry area = %q", entry.Area)
 		}
-		if entry.WorkDescription != "焊接支架" {
+		if entry.WorkDescription != "????" {
 			t.Fatalf("entry work_description = %q", entry.WorkDescription)
 		}
 	}
 
-	if got := byField["sqxx.0.value"].FieldDescription; got != "作业名称" {
+	if got := byField["sqxx.0.value"].FieldDescription; got != "????" {
 		t.Fatalf("sqxx.0.value description = %q", got)
 	}
-	if got := byField["sqxx.3.value"].FieldDescription; got != "作业地点" {
+	if got := byField["sqxx.3.value"].FieldDescription; got != "????" {
 		t.Fatalf("sqxx.3.value description = %q", got)
 	}
-	if got := byField["sqxx.4.value"].FieldDescription; got != "审批人" {
+	if got := byField["sqxx.4.value"].FieldDescription; got != "???" {
 		t.Fatalf("sqxx.4.value description = %q", got)
 	}
 }

@@ -44,13 +44,18 @@ func NewLLMWpTypeRecognizer(chatModel model.BaseChatModel, args ...any) (WpTypeR
 	}, nil
 }
 
-func (r *llmWpTypeRecognizer) Recognize(ctx context.Context, description string, templates []WpMetaInfo) ([]int, error) {
+func (r *llmWpTypeRecognizer) Recognize(ctx context.Context, description string, templates []WpMetaInfo, candidates []WpMetaInfo) ([]int, error) {
 	description = strings.TrimSpace(description)
 	if description == "" {
 		return nil, fmt.Errorf("work description is empty")
 	}
 
-	candidateJSON, err := json.Marshal(templates)
+	promptTemplates := templates
+	if len(candidates) > 0 {
+		promptTemplates = candidates
+	}
+
+	candidateJSON, err := json.Marshal(promptTemplates)
 	if err != nil {
 		return nil, fmt.Errorf("marshal work permit templates: %w", err)
 	}

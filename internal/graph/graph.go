@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,8 +24,9 @@ const (
 	nodeValidateFilledWps = "validateFilledWps"
 	nodeSubmitWps         = "submitWps"
 
-	validationValid   = "valid"
-	validationInvalid = "invalid"
+	operationConfirmWpTypes = "confirm_wp_types"
+	validationValid         = "valid"
+	validationInvalid       = "invalid"
 )
 
 type EquipmentInfo struct {
@@ -94,7 +96,7 @@ type WpInfoExtractor interface {
 }
 
 type WpTypeRecognizer interface {
-	Recognize(ctx context.Context, description string, templates []WpMetaInfo) ([]int, error)
+	Recognize(ctx context.Context, description string, templates []WpMetaInfo, candidates []WpMetaInfo) ([]int, error)
 }
 
 type StructuredMemoryEntry struct {
@@ -114,11 +116,32 @@ type StructuredMemoryStore interface {
 	ListAreasByType(ctx context.Context, wpTypeID int) ([]string, error)
 	FindByType(ctx context.Context, wpTypeID int) ([]StructuredMemoryEntry, error)
 	Upsert(ctx context.Context, entry StructuredMemoryEntry) error
+	FindIntentMemoryBySite(ctx context.Context, siteID int) ([]StructuredIntentMemoryEntry, error)
+	UpsertIntentMemory(ctx context.Context, entry StructuredIntentMemoryEntry) error
+}
+
+type StructuredIntentMemoryEntry struct {
+	SiteID          int    `json:"site_id"`          // 站点ID
+	Area            string `json:"area"`             // 作业区域
+	WorkDescription string `json:"work_description"` // 作业描述
+	WpTypeIDs       []int  `json:"wp_type_ids"`      // 对应作业票类型ID列表
+	Source          string `json:"source"`           // 来源文件
+	UpdatedAt       int64  `json:"updated_at"`       // 更新时间
+}
+
+type IntentMemoryRetrievalConfig struct {
+	ScoreThreshold int
+	TopN           int
 }
 
 type SubmitWpsApproval struct {
 	Approved bool             `json:"approved"`
 	Payloads []map[string]any `json:"payloads"`
+}
+
+type WpTypeConfirmation struct {
+	Confirmed     bool         `json:"confirmed"`
+	IntentWpTypes []WpMetaInfo `json:"intent_wp_types"`
 }
 
 type WpInfoSupplement struct {
@@ -230,13 +253,31 @@ func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState
 	return state, nil
 }
 
-func newIntentRecognitionNode(templateTool einotool.InvokableTool, recognizer WpTypeRecognizer) func(context.Context, *WpGraphState) (*WpGraphState, error) {
+func newIntentRecognitionNode(templateTool einotool.InvokableTool, memoryStore StructuredMemoryStore, recognizer WpTypeRecognizer, args ...any) func(context.Context, *WpGraphState) (*WpGraphState, error) {
 	return func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
 		if templateTool == nil {
 			return nil, fmt.Errorf("work permit template tool is nil")
 		}
+		if memoryStore == nil {
+			return nil, fmt.Errorf("structured memory store is nil")
+		}
 		if recognizer == nil {
 			return nil, fmt.Errorf("work permit type recognizer is nil")
+		}
+		retrievalConfig := IntentMemoryRetrievalConfig{ScoreThreshold: 10, TopN: 5}
+		confirmWpTypes := true
+		for _, arg := range args {
+			switch value := arg.(type) {
+			case IntentMemoryRetrievalConfig:
+				if value.ScoreThreshold > 0 {
+					retrievalConfig.ScoreThreshold = value.ScoreThreshold
+				}
+				if value.TopN > 0 {
+					retrievalConfig.TopN = value.TopN
+				}
+			case bool:
+				confirmWpTypes = value
+			}
 		}
 
 		raw, err := templateTool.InvokableRun(ctx, fmt.Sprintf(`{"siteid":%d}`, state.SiteID))
@@ -249,7 +290,36 @@ func newIntentRecognitionNode(templateTool einotool.InvokableTool, recognizer Wp
 			return nil, fmt.Errorf("decode work permit templates: %w", err)
 		}
 
-		selectedIDs, err := recognizer.Recognize(ctx, state.Description, templates)
+		if state == nil {
+			if wasInterrupted, hasState, interruptedState := compose.GetInterruptState[*WpGraphState](ctx); wasInterrupted && hasState {
+				state = interruptedState
+			}
+		}
+		if state == nil {
+			return nil, fmt.Errorf("work permit graph state is nil")
+		}
+
+		intentCandidates, err := findIntentMemoryCandidates(ctx, memoryStore, state.SiteID, state.Area, state.Description, templates, retrievalConfig)
+		if err != nil {
+			return nil, fmt.Errorf("load intent memory candidates: %w", err)
+		}
+
+		if isResume, hasData, confirmationData := compose.GetResumeContext[WpTypeConfirmation](ctx); isResume {
+			if !hasData {
+				return nil, fmt.Errorf("work permit type confirmation is missing")
+			}
+			if !confirmationData.Confirmed {
+				return nil, fmt.Errorf("work permit type confirmation is not approved")
+			}
+			state.IntentWpTypes, err = validateWpTypeConfirmation(templates, confirmationData.IntentWpTypes)
+			if err != nil {
+				return nil, err
+			}
+			state.CurrentNode = nodeIntentRecognition
+			return state, nil
+		}
+
+		selectedIDs, err := recognizer.Recognize(ctx, state.Description, templates, intentCandidates)
 		if err != nil {
 			return nil, fmt.Errorf("recognize work permit types: %w", err)
 		}
@@ -259,8 +329,43 @@ func newIntentRecognitionNode(templateTool einotool.InvokableTool, recognizer Wp
 			return nil, err
 		}
 		state.CurrentNode = nodeIntentRecognition
+		if confirmWpTypes {
+			return nil, compose.StatefulInterrupt(ctx, map[string]any{
+				"operation":       operationConfirmWpTypes,
+				"question":        "请确认识别出的作业票类型，必要时可修改后提交",
+				"intent_wp_types": state.IntentWpTypes,
+				"state":           state,
+			}, state)
+		}
 		return state, nil
 	}
+}
+
+func validateWpTypeConfirmation(templates []WpMetaInfo, selected []WpMetaInfo) ([]WpMetaInfo, error) {
+	if len(selected) == 0 {
+		return nil, fmt.Errorf("intent_wp_types is required")
+	}
+
+	byTemplateID := make(map[int]WpMetaInfo, len(templates))
+	for _, template := range templates {
+		byTemplateID[template.Id] = template
+	}
+
+	result := make([]WpMetaInfo, 0, len(selected))
+	seen := make(map[int]struct{}, len(selected))
+	for _, item := range selected {
+		canonical, ok := byTemplateID[item.Id]
+		if !ok {
+			return nil, fmt.Errorf("unknown work permit template id %d", item.Id)
+		}
+		if _, ok := seen[item.Id]; ok {
+			continue
+		}
+		seen[item.Id] = struct{}{}
+		result = append(result, canonical)
+	}
+
+	return result, nil
 }
 
 func validateFilledWpsNode(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
@@ -268,6 +373,133 @@ func validateFilledWpsNode(ctx context.Context, state *WpGraphState) (*WpGraphSt
 	state.CurrentNode = nodeValidateFilledWps
 	state.ValidationStatus = validationValid
 	return state, nil
+}
+
+func findIntentMemoryCandidates(ctx context.Context, memoryStore StructuredMemoryStore, siteID int, area, description string, templates []WpMetaInfo, config IntentMemoryRetrievalConfig) ([]WpMetaInfo, error) {
+	entries, err := memoryStore.FindIntentMemoryBySite(ctx, siteID)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	templateByTypeID := make(map[int]WpMetaInfo, len(templates))
+	for _, template := range templates {
+		templateByTypeID[template.WpTypeId] = template
+	}
+
+	type scoredCandidate struct {
+		template WpMetaInfo
+		score    int
+	}
+	seen := make(map[int]struct{})
+	scored := make([]scoredCandidate, 0)
+	for _, entry := range entries {
+		matchScore := scoreIntentMemoryEntry(description, area, entry)
+		if matchScore < config.ScoreThreshold {
+			continue
+		}
+		for _, wpTypeID := range entry.WpTypeIDs {
+			template, ok := templateByTypeID[wpTypeID]
+			if !ok {
+				continue
+			}
+			score := matchScore + 1
+			if strings.TrimSpace(template.WpTypeName) != "" && strings.Contains(strings.ToLower(strings.TrimSpace(description)), strings.ToLower(strings.TrimSpace(template.WpTypeName))) {
+				score += 2
+			}
+			if _, ok := seen[template.WpTypeId]; ok {
+				continue
+			}
+			seen[template.WpTypeId] = struct{}{}
+			scored = append(scored, scoredCandidate{template: template, score: score})
+		}
+	}
+	if len(scored) == 0 {
+		return nil, nil
+	}
+	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].score == scored[j].score {
+			return scored[i].template.WpTypeId < scored[j].template.WpTypeId
+		}
+		return scored[i].score > scored[j].score
+	})
+	result := make([]WpMetaInfo, 0, len(scored))
+	for _, item := range scored {
+		if config.TopN > 0 && len(result) >= config.TopN {
+			break
+		}
+		result = append(result, item.template)
+	}
+	return result, nil
+}
+
+func scoreIntentMemoryEntry(description, area string, entry StructuredIntentMemoryEntry) int {
+	description = normalizeIntentText(description)
+	area = normalizeIntentText(area)
+	candidateDescription := normalizeIntentText(entry.WorkDescription)
+	candidateArea := normalizeIntentText(entry.Area)
+
+	score := textSimilarityScore(description, candidateDescription)
+	if score == 0 {
+		return 0
+	}
+	if area != "" && candidateArea != "" {
+		if area == candidateArea || strings.Contains(area, candidateArea) || strings.Contains(candidateArea, area) {
+			score += 3
+		}
+	}
+	return score
+}
+
+func normalizeIntentText(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return ""
+	}
+	var builder strings.Builder
+	builder.Grow(len(value))
+	for _, r := range value {
+		if strings.ContainsRune(" \t\r\n,，。./\\-_()[]{}<>:;：；、", r) {
+			continue
+		}
+		builder.WriteRune(r)
+	}
+	return builder.String()
+}
+
+func textSimilarityScore(left, right string) int {
+	if left == "" || right == "" {
+		return 0
+	}
+	if left == right {
+		return 100
+	}
+	if strings.Contains(left, right) || strings.Contains(right, left) {
+		shorter := left
+		if len([]rune(right)) < len([]rune(left)) {
+			shorter = right
+		}
+		return 50 + len([]rune(shorter))
+	}
+
+	leftSet := make(map[rune]struct{})
+	for _, r := range left {
+		leftSet[r] = struct{}{}
+	}
+	score := 0
+	seen := make(map[rune]struct{})
+	for _, r := range right {
+		if _, ok := leftSet[r]; ok {
+			if _, dup := seen[r]; dup {
+				continue
+			}
+			seen[r] = struct{}{}
+			score++
+		}
+	}
+	return score
 }
 
 func routeAfterWpInfoValidation(ctx context.Context, state *WpGraphState) (string, error) {
@@ -291,6 +523,8 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	var fillRules WpFillRules
 	var updateWpInfoTool einotool.InvokableTool
 	var linkWpInfoTool einotool.InvokableTool
+	retrievalConfig := IntentMemoryRetrievalConfig{ScoreThreshold: 10, TopN: 5}
+	confirmWpTypes := true
 	graphOptions := make([]compose.GraphCompileOption, 0)
 
 	switch {
@@ -316,6 +550,19 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 			updateWpInfoTool = updateTool
 			linkWpInfoTool = linkTool
 			for _, arg := range args[4:] {
+				if value, ok := arg.(IntentMemoryRetrievalConfig); ok {
+					if value.ScoreThreshold > 0 {
+						retrievalConfig.ScoreThreshold = value.ScoreThreshold
+					}
+					if value.TopN > 0 {
+						retrievalConfig.TopN = value.TopN
+					}
+					continue
+				}
+				if value, ok := arg.(bool); ok {
+					confirmWpTypes = value
+					continue
+				}
 				option, ok := arg.(compose.GraphCompileOption)
 				if !ok {
 					return nil, fmt.Errorf("graph option has invalid type %T", arg)
@@ -352,6 +599,19 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 		updateWpInfoTool = updateTool
 		linkWpInfoTool = linkTool
 		for _, arg := range args[5:] {
+			if value, ok := arg.(IntentMemoryRetrievalConfig); ok {
+				if value.ScoreThreshold > 0 {
+					retrievalConfig.ScoreThreshold = value.ScoreThreshold
+				}
+				if value.TopN > 0 {
+					retrievalConfig.TopN = value.TopN
+				}
+				continue
+			}
+			if value, ok := arg.(bool); ok {
+				confirmWpTypes = value
+				continue
+			}
 			option, ok := arg.(compose.GraphCompileOption)
 			if !ok {
 				return nil, fmt.Errorf("graph option has invalid type %T", arg)
@@ -392,7 +652,7 @@ parsed:
 
 	graph.AddLambdaNode(nodeAskWpInfo, compose.InvokableLambda(newAskWpInfoNode(extractor)))
 	graph.AddLambdaNode(nodeValidateWpInfo, compose.InvokableLambda(validateWpInfoNode))
-	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, recognizer)))
+	graph.AddLambdaNode(nodeIntentRecognition, compose.InvokableLambda(newIntentRecognitionNode(templateTool, memoryStore, recognizer, retrievalConfig, confirmWpTypes)))
 	graph.AddLambdaNode(nodeSearchWpTemplate, compose.InvokableLambda(newSearchWpTemplateNode(templateDetailTool)))
 	graph.AddLambdaNode(nodeFillWps, compose.InvokableLambda(newFillWpsNode(chatModel, promptStore, memoryStore, fillRules)))
 	graph.AddLambdaNode(nodeValidateFilledWps, compose.InvokableLambda(validateFilledWpsNode))

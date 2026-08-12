@@ -101,6 +101,11 @@ func run() error {
 		fillRules,
 		updateTool,
 		linkTool,
+		graph.IntentMemoryRetrievalConfig{
+			ScoreThreshold: cfg.WorkPermitAPI.IntentMemoryScoreThresholdOrDefault(),
+			TopN:           cfg.WorkPermitAPI.IntentMemoryTopNOrDefault(),
+		},
+		cfg.WorkPermitAPI.ConfirmWpTypesEnabled(),
 		compose.WithCheckPointStore(checkpointStore),
 		compose.WithGraphName("work-permit"),
 	)

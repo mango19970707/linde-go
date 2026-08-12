@@ -45,7 +45,7 @@ func newSubmitWpsNode(memoryStore StructuredMemoryStore, updateWpInfoTool einoto
 			if permitTypeID == 0 {
 				return nil, fmt.Errorf("required work permit type id is missing")
 			}
-			if err := submitApprovedWps(ctx, updateWpInfoTool, linkWpInfoTool, memoryStore, state.WpTemplates, permitTypeID, approval); err != nil {
+			if err := submitApprovedWps(ctx, updateWpInfoTool, linkWpInfoTool, memoryStore, state, permitTypeID, approval); err != nil {
 				return nil, err
 			}
 
@@ -68,9 +68,12 @@ func newSubmitWpsNode(memoryStore StructuredMemoryStore, updateWpInfoTool einoto
 	}
 }
 
-func submitApprovedWps(ctx context.Context, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, memoryStore StructuredMemoryStore, templates []WpTemplate, permitTypeID int, approval SubmitWpsApproval) error {
+func submitApprovedWps(ctx context.Context, updateWpInfoTool einotool.InvokableTool, linkWpInfoTool einotool.InvokableTool, memoryStore StructuredMemoryStore, state *WpGraphState, permitTypeID int, approval SubmitWpsApproval) error {
 	if len(approval.Payloads) == 0 {
 		return fmt.Errorf("approved work permit payloads are empty")
+	}
+	if state == nil {
+		return fmt.Errorf("work permit graph state is nil")
 	}
 
 	ids := make([]int, 0, len(approval.Payloads))
@@ -113,10 +116,54 @@ func submitApprovedWps(ctx context.Context, updateWpInfoTool einotool.InvokableT
 			return fmt.Errorf("link child work permit %d to parent %d: %w", ids[childIndex], ids[parentIndex], err)
 		}
 	}
-	if err := persistStructuredMemoryFromPayloads(ctx, memoryStore, templates, approval.Payloads, ids); err != nil {
+	if err := persistStructuredMemoryFromPayloads(ctx, memoryStore, state.WpTemplates, approval.Payloads, ids); err != nil {
+		return err
+	}
+	if err := persistIntentMemoryFromState(ctx, memoryStore, state, ids); err != nil {
 		return err
 	}
 	return nil
+}
+
+func persistIntentMemoryFromState(ctx context.Context, memoryStore StructuredMemoryStore, state *WpGraphState, ids []int) error {
+	if memoryStore == nil {
+		return fmt.Errorf("structured memory store is nil")
+	}
+	if state == nil {
+		return fmt.Errorf("work permit graph state is nil")
+	}
+	if len(state.IntentWpTypes) == 0 {
+		return nil
+	}
+
+	wpTypeIDs := make([]int, 0, len(state.IntentWpTypes))
+	seen := make(map[int]struct{}, len(state.IntentWpTypes))
+	for _, item := range state.IntentWpTypes {
+		if item.WpTypeId == 0 {
+			continue
+		}
+		if _, ok := seen[item.WpTypeId]; ok {
+			continue
+		}
+		seen[item.WpTypeId] = struct{}{}
+		wpTypeIDs = append(wpTypeIDs, item.WpTypeId)
+	}
+	if len(wpTypeIDs) == 0 {
+		return nil
+	}
+
+	source := "intent"
+	if len(ids) > 0 {
+		source = "intent-" + strconv.Itoa(ids[0])
+	}
+	return memoryStore.UpsertIntentMemory(ctx, StructuredIntentMemoryEntry{
+		SiteID:          state.SiteID,
+		Area:            strings.TrimSpace(state.Area),
+		WorkDescription: strings.TrimSpace(state.Description),
+		WpTypeIDs:       wpTypeIDs,
+		Source:          source,
+		UpdatedAt:       time.Now().Unix(),
+	})
 }
 
 func ImportStructuredMemoryPayloads(ctx context.Context, memoryStore StructuredMemoryStore, payloads []map[string]any, sourcePrefix string) (int, error) {

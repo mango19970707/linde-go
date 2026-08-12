@@ -3,13 +3,54 @@ package graph
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 )
+
+func TestSQLiteIntentStructuredMemoryStoreQueriesByDescriptionSimilarity(t *testing.T) {
+	t.Parallel()
+
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "intent_memory.db"))
+	if err != nil {
+		t.Fatalf("sql.Open() error = %v", err)
+	}
+	defer db.Close()
+
+	store, err := NewSQLiteStructuredMemoryStore(db)
+	if err != nil {
+		t.Fatalf("NewSQLiteStructuredMemoryStore() error = %v", err)
+	}
+
+	if err := store.UpsertIntentMemory(context.Background(), StructuredIntentMemoryEntry{
+		SiteID:          28,
+		Area:            "A区",
+		WorkDescription: "动火作业",
+		WpTypeIDs:       []int{23, 1},
+		Source:          "test",
+		UpdatedAt:       1,
+	}); err != nil {
+		t.Fatalf("UpsertIntentMemory() error = %v", err)
+	}
+
+	entries, err := store.FindIntentMemoryBySite(context.Background(), 28)
+	if err != nil {
+		t.Fatalf("FindIntentMemoryBySite() error = %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if entries[0].WorkDescription != "动火作业" {
+		t.Fatalf("WorkDescription = %q", entries[0].WorkDescription)
+	}
+	if len(entries[0].WpTypeIDs) != 2 || entries[0].WpTypeIDs[0] != 23 || entries[0].WpTypeIDs[1] != 1 {
+		t.Fatalf("WpTypeIDs = %#v", entries[0].WpTypeIDs)
+	}
+}
 
 func TestSQLiteStructuredMemoryStoreQueriesByTypeAndArea(t *testing.T) {
 	t.Parallel()
 
-	db, err := sql.Open("sqlite", `D:\code\linde-go-v2\data\structured_memory.db`)
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "structured_memory.db"))
 	if err != nil {
 		t.Fatalf("sql.Open() error = %v", err)
 	}
@@ -21,69 +62,41 @@ func TestSQLiteStructuredMemoryStoreQueriesByTypeAndArea(t *testing.T) {
 	}
 
 	area := "空分装置东侧冷箱平台"
-
-	var wantAreaCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM structured_memory_entries WHERE wp_type_id = ? AND area = ?`, 23, area).Scan(&wantAreaCount); err != nil {
-		t.Fatalf("count structured memory entries by type and area: %v", err)
+	seedEntries := []StructuredMemoryEntry{
+		{WpTypeID: 23, WpTypeName: "PTW800", Area: area, WorkDescription: "动火", FieldDescription: "地点", FieldName: "sqxx.0.value", FieldValue: "冷箱平台", Source: "seed-1", UpdatedAt: 1},
+		{WpTypeID: 23, WpTypeName: "PTW800", Area: area, WorkDescription: "动火", FieldDescription: "电话", FieldName: "sqxx.1.value", FieldValue: "13800138000", Source: "seed-1", UpdatedAt: 1},
+		{WpTypeID: 23, WpTypeName: "PTW800", Area: "空分装置西侧", WorkDescription: "受限空间", FieldDescription: "地点", FieldName: "sqxx.0.value", FieldValue: "塔下", Source: "seed-2", UpdatedAt: 2},
+	}
+	for _, entry := range seedEntries {
+		if err := store.Upsert(context.Background(), entry); err != nil {
+			t.Fatalf("Upsert() error = %v", err)
+		}
 	}
 
 	entries, err := store.FindByTypeAndArea(context.Background(), 23, area)
 	if err != nil {
 		t.Fatalf("FindByTypeAndArea() error = %v", err)
 	}
-	if len(entries) != wantAreaCount {
-		t.Fatalf("len(entries) = %d, want %d", len(entries), wantAreaCount)
-	}
-
-	wantAreas, err := loadDistinctAreas(db, 23)
-	if err != nil {
-		t.Fatalf("loadDistinctAreas() error = %v", err)
+	if len(entries) != 2 {
+		t.Fatalf("len(entries) = %d, want 2", len(entries))
 	}
 
 	areas, err := store.ListAreasByType(context.Background(), 23)
 	if err != nil {
 		t.Fatalf("ListAreasByType() error = %v", err)
 	}
-	if len(areas) != len(wantAreas) {
-		t.Fatalf("len(areas) = %d, want %d", len(areas), len(wantAreas))
+	if len(areas) != 2 {
+		t.Fatalf("len(areas) = %d, want 2", len(areas))
 	}
-	for i := range wantAreas {
-		if areas[i] != wantAreas[i] {
-			t.Fatalf("areas = %#v, want %#v", areas, wantAreas)
-		}
-	}
-
-	var wantTotal int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM structured_memory_entries WHERE wp_type_id = ?`, 23).Scan(&wantTotal); err != nil {
-		t.Fatalf("count structured memory entries by type: %v", err)
+	if areas[0] != "空分装置东侧冷箱平台" || areas[1] != "空分装置西侧" {
+		t.Fatalf("areas = %#v", areas)
 	}
 
 	allEntries, err := store.FindByType(context.Background(), 23)
 	if err != nil {
 		t.Fatalf("FindByType() error = %v", err)
 	}
-	if len(allEntries) != wantTotal {
-		t.Fatalf("len(allEntries) = %d, want %d", len(allEntries), wantTotal)
+	if len(allEntries) != 3 {
+		t.Fatalf("len(allEntries) = %d, want 3", len(allEntries))
 	}
-}
-
-func loadDistinctAreas(db *sql.DB, wpTypeID int) ([]string, error) {
-	rows, err := db.Query(`SELECT DISTINCT area FROM structured_memory_entries WHERE wp_type_id = ? AND area <> '' ORDER BY area ASC`, wpTypeID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	areas := make([]string, 0)
-	for rows.Next() {
-		var area string
-		if err := rows.Scan(&area); err != nil {
-			return nil, err
-		}
-		areas = append(areas, area)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return areas, nil
 }

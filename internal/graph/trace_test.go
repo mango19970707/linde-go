@@ -50,6 +50,7 @@ func TestBuildWpGraphLogsWithSessionID(t *testing.T) {
 		WpFillRules{},
 		&recordingUpdateWpInfoTool{},
 		&recordingLinkWpInfoTool{},
+		false,
 	)
 	if err != nil {
 		t.Fatalf("BuildWpGraph() error = %v", err)

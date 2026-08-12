@@ -78,6 +78,7 @@ func TestBuildWpGraphResumesApprovalAfterSubmitInterruptWithMarshaledFixtures(t 
 		WpFillRules{},
 		updateTool,
 		linkTool,
+		false,
 		compose.WithCheckPointStore(store),
 		compose.WithGraphName("work-permit"),
 	)

@@ -179,3 +179,76 @@ structured_memory_db:
 		t.Fatalf("StructuredMemoryDB.DSN = %q, want %q", cfg.StructuredMemoryDB.DSN, want)
 	}
 }
+
+func TestWorkPermitAPIConfirmWpTypesDefaultsToEnabled(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("work_permit_api: {}\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.WorkPermitAPI.ConfirmWpTypesEnabled() {
+		t.Fatal("ConfirmWpTypesEnabled() = false, want true")
+	}
+}
+
+func TestWorkPermitAPIConfirmWpTypesCanBeDisabled(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, []byte("work_permit_api:\n  confirm_wp_types: false\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.WorkPermitAPI.ConfirmWpTypesEnabled() {
+		t.Fatal("ConfirmWpTypesEnabled() = true, want false")
+	}
+}
+
+func TestWorkPermitAPIIntentMemoryDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg := WorkPermitAPIConfig{}
+	if got := cfg.IntentMemoryScoreThresholdOrDefault(); got != 10 {
+		t.Fatalf("IntentMemoryScoreThresholdOrDefault() = %d, want 10", got)
+	}
+	if got := cfg.IntentMemoryTopNOrDefault(); got != 5 {
+		t.Fatalf("IntentMemoryTopNOrDefault() = %d, want 5", got)
+	}
+}
+
+func TestLoadWorkPermitAPIIntentMemoryConfig(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	content := `work_permit_api:
+  intent_memory_score_threshold: 23
+  intent_memory_top_n: 2
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := cfg.WorkPermitAPI.IntentMemoryScoreThresholdOrDefault(); got != 23 {
+		t.Fatalf("threshold = %d, want 23", got)
+	}
+	if got := cfg.WorkPermitAPI.IntentMemoryTopNOrDefault(); got != 2 {
+		t.Fatalf("top_n = %d, want 2", got)
+	}
+}

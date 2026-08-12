@@ -21,10 +21,12 @@ type WorkPermitRunner interface {
 }
 
 type workPermitRequest struct {
-	SessionID string           `json:"session_id"`
-	Input     string           `json:"input"`
-	Approved  *bool            `json:"approved,omitempty"`
-	Payloads  []map[string]any `json:"payloads,omitempty"`
+	SessionID     string             `json:"session_id"`
+	Input         string             `json:"input"`
+	Approved      *bool              `json:"approved,omitempty"`
+	Confirmed     *bool              `json:"confirmed,omitempty"`
+	IntentWpTypes []graph.WpMetaInfo `json:"intent_wp_types,omitempty"`
+	Payloads      []map[string]any   `json:"payloads,omitempty"`
 }
 
 type structuredMemoryImportRequest struct {
@@ -33,12 +35,13 @@ type structuredMemoryImportRequest struct {
 }
 
 type workPermitResponse struct {
-	SessionID     string           `json:"session_id"`
-	Status        string           `json:"status"`
-	MissingFields []string         `json:"missing_fields,omitempty"`
-	Question      string           `json:"question,omitempty"`
-	FilledWps     []graph.FilledWp `json:"filled_wps,omitempty"`
-	Message       string           `json:"message,omitempty"`
+	SessionID     string             `json:"session_id"`
+	Status        string             `json:"status"`
+	MissingFields []string           `json:"missing_fields,omitempty"`
+	Question      string             `json:"question,omitempty"`
+	IntentWpTypes []graph.WpMetaInfo `json:"intent_wp_types,omitempty"`
+	FilledWps     []graph.FilledWp   `json:"filled_wps,omitempty"`
+	Message       string             `json:"message,omitempty"`
 }
 
 type sessionState struct {
@@ -241,6 +244,15 @@ func (s *WorkPermitServer) handleResumeRequest(c *gin.Context, request workPermi
 			Approved: *request.Approved,
 			Payloads: request.Payloads,
 		}
+	case "confirm_wp_types":
+		if request.Confirmed == nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "confirmed is required"})
+			return
+		}
+		resumeData = graph.WpTypeConfirmation{
+			Confirmed:     *request.Confirmed,
+			IntentWpTypes: request.IntentWpTypes,
+		}
 	default:
 		c.JSON(http.StatusConflict, gin.H{"error": "unsupported session operation"})
 		return
@@ -261,7 +273,7 @@ func (s *WorkPermitServer) writeRunResult(c *gin.Context, sessionID, checkpointI
 	if runErr != nil {
 		if info, ok := compose.ExtractInterruptInfo(runErr); ok && len(info.InterruptContexts) > 0 {
 			interrupt := info.InterruptContexts[0]
-			operation, missingFields, question, filledWps := interruptDetails(interrupt.Info)
+			operation, missingFields, question, filledWps, intentWpTypes := interruptDetails(interrupt.Info)
 			s.setSession(sessionID, sessionState{
 				CheckpointID: checkpointID,
 				InterruptID:  interrupt.ID,
@@ -272,10 +284,13 @@ func (s *WorkPermitServer) writeRunResult(c *gin.Context, sessionID, checkpointI
 				SessionID:     sessionID,
 				MissingFields: missingFields,
 				Question:      question,
+				IntentWpTypes: intentWpTypes,
 				FilledWps:     filledWps,
 			}
 			if operation == "collect_wp_info" {
 				response.Status = "need_more_info"
+			} else if operation == "confirm_wp_types" {
+				response.Status = "need_wp_type_confirmation"
 			} else if operation == "submit_work_permits" {
 				response.Status = "need_approval"
 			} else {
@@ -296,10 +311,11 @@ func (s *WorkPermitServer) writeRunResult(c *gin.Context, sessionID, checkpointI
 	}
 	c.JSON(http.StatusOK, response)
 }
-func interruptDetails(info any) (operation string, missingFields []string, question string, filledWps []graph.FilledWp) {
+
+func interruptDetails(info any) (operation string, missingFields []string, question string, filledWps []graph.FilledWp, intentWpTypes []graph.WpMetaInfo) {
 	payload, ok := info.(map[string]any)
 	if !ok {
-		return "", nil, "", nil
+		return "", nil, "", nil, nil
 	}
 	operation, _ = payload["operation"].(string)
 	question, _ = payload["question"].(string)
@@ -320,7 +336,15 @@ func interruptDetails(info any) (operation string, missingFields []string, quest
 			_ = json.Unmarshal(raw, &filledWps)
 		}
 	}
-	return operation, missingFields, question, filledWps
+	if values, ok := payload["intent_wp_types"].([]graph.WpMetaInfo); ok {
+		intentWpTypes = values
+	} else if values, ok := payload["intent_wp_types"]; ok {
+		raw, err := json.Marshal(values)
+		if err == nil {
+			_ = json.Unmarshal(raw, &intentWpTypes)
+		}
+	}
+	return operation, missingFields, question, filledWps, intentWpTypes
 }
 
 func (s *WorkPermitServer) setSession(sessionID string, state sessionState) {

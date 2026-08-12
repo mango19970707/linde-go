@@ -26,6 +26,9 @@ work_permit_api:
   user_id: 464
   timeout: 30s
   headers: {}
+  confirm_wp_types: true
+  intent_memory_score_threshold: 10
+  intent_memory_top_n: 5
 
 structured_memory_db:
   driver: sqlite

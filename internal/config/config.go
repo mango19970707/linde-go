@@ -34,11 +34,37 @@ type ModelProviderConfig struct {
 }
 
 type WorkPermitAPIConfig struct {
-	BaseURL string            `yaml:"base_url"`
-	SiteID  int               `yaml:"site_id"`
-	UserID  int               `yaml:"user_id"`
-	Timeout time.Duration     `yaml:"timeout"`
-	Headers map[string]string `yaml:"headers"`
+	BaseURL                    string            `yaml:"base_url"`
+	SiteID                     int               `yaml:"site_id"`
+	UserID                     int               `yaml:"user_id"`
+	Timeout                    time.Duration     `yaml:"timeout"`
+	Headers                    map[string]string `yaml:"headers"`
+	ConfirmWpTypes             *bool             `yaml:"confirm_wp_types"`
+	IntentMemoryScoreThreshold int               `yaml:"intent_memory_score_threshold"`
+	IntentMemoryTopN           int               `yaml:"intent_memory_top_n"`
+}
+
+const (
+	defaultIntentMemoryScoreThreshold = 10
+	defaultIntentMemoryTopN           = 5
+)
+
+func (c WorkPermitAPIConfig) ConfirmWpTypesEnabled() bool {
+	return c.ConfirmWpTypes == nil || *c.ConfirmWpTypes
+}
+
+func (c WorkPermitAPIConfig) IntentMemoryScoreThresholdOrDefault() int {
+	if c.IntentMemoryScoreThreshold > 0 {
+		return c.IntentMemoryScoreThreshold
+	}
+	return defaultIntentMemoryScoreThreshold
+}
+
+func (c WorkPermitAPIConfig) IntentMemoryTopNOrDefault() int {
+	if c.IntentMemoryTopN > 0 {
+		return c.IntentMemoryTopN
+	}
+	return defaultIntentMemoryTopN
 }
 
 type StructuredMemoryDBConfig struct {

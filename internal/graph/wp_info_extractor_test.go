@@ -112,7 +112,7 @@ func TestLLMWpTypeRecognizerRecognizeParsesTypeIDs(t *testing.T) {
 	got, err := recognizer.Recognize(context.Background(), "进行动火和临时用电作业", []WpMetaInfo{
 		{WpTypeId: 1, WpTypeName: "动火作业"},
 		{WpTypeId: 9, WpTypeName: "临时用电"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Recognize() error = %v", err)
 	}

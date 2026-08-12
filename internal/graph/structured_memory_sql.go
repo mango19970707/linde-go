@@ -215,6 +215,79 @@ ON CONFLICT(wp_type_id, area, source, field_name) DO UPDATE SET
 	return nil
 }
 
+func (s SQLStructuredMemoryStore) FindIntentMemoryBySite(ctx context.Context, siteID int) ([]StructuredIntentMemoryEntry, error) {
+	rows, err := s.db.QueryContext(ctx, s.rebind(`
+SELECT site_id, area, work_description, wp_type_ids_json, source, updated_at
+FROM structured_intent_memory_entries
+WHERE site_id = ?
+ORDER BY updated_at DESC, work_description ASC
+`), siteID)
+	if err != nil {
+		return nil, fmt.Errorf("query structured intent memory by site: %w", err)
+	}
+	defer rows.Close()
+
+	entries := make([]StructuredIntentMemoryEntry, 0)
+	for rows.Next() {
+		var entry StructuredIntentMemoryEntry
+		var wpTypeIDsJSON string
+		if err := rows.Scan(
+			&entry.SiteID,
+			&entry.Area,
+			&entry.WorkDescription,
+			&wpTypeIDsJSON,
+			&entry.Source,
+			&entry.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan structured intent memory entry: %w", err)
+		}
+		if err := json.Unmarshal([]byte(wpTypeIDsJSON), &entry.WpTypeIDs); err != nil {
+			return nil, fmt.Errorf("decode structured intent memory wp type ids: %w", err)
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate structured intent memory entries: %w", err)
+	}
+	return entries, nil
+}
+
+func (s SQLStructuredMemoryStore) UpsertIntentMemory(ctx context.Context, entry StructuredIntentMemoryEntry) error {
+	if s.db == nil {
+		return fmt.Errorf("structured memory db is nil")
+	}
+
+	wpTypeIDsJSON, err := json.Marshal(entry.WpTypeIDs)
+	if err != nil {
+		return fmt.Errorf("encode structured intent memory wp type ids: %w", err)
+	}
+
+	_, err = s.db.ExecContext(ctx, s.rebind(`
+INSERT INTO structured_intent_memory_entries (
+	site_id,
+	area,
+	work_description,
+	wp_type_ids_json,
+	source,
+	updated_at
+) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(site_id, area, work_description, source) DO UPDATE SET
+	wp_type_ids_json = excluded.wp_type_ids_json,
+	updated_at = excluded.updated_at
+`),
+		entry.SiteID,
+		entry.Area,
+		entry.WorkDescription,
+		string(wpTypeIDsJSON),
+		entry.Source,
+		entry.UpdatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert structured intent memory entry %q: %w", entry.WorkDescription, err)
+	}
+	return nil
+}
+
 func schemaStatementsByDialect(dialect string) []string {
 	if dialect == "pgx" {
 		return []string{
@@ -234,6 +307,17 @@ func schemaStatementsByDialect(dialect string) []string {
 			`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_area ON structured_memory_entries (wp_type_id, area)`,
 			`CREATE INDEX IF NOT EXISTS idx_structured_memory_type ON structured_memory_entries (wp_type_id)`,
 			`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_updated_at ON structured_memory_entries (wp_type_id, updated_at)`,
+			`CREATE TABLE IF NOT EXISTS structured_intent_memory_entries (
+				site_id BIGINT NOT NULL,
+				area TEXT NOT NULL DEFAULT '',
+				work_description TEXT NOT NULL DEFAULT '',
+				wp_type_ids_json TEXT NOT NULL,
+				source TEXT NOT NULL,
+				updated_at BIGINT NOT NULL,
+				PRIMARY KEY (site_id, area, work_description, source)
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_structured_intent_memory_site ON structured_intent_memory_entries (site_id, updated_at)`,
+			`CREATE INDEX IF NOT EXISTS idx_structured_intent_memory_desc ON structured_intent_memory_entries (site_id, work_description)`,
 		}
 	}
 
@@ -254,6 +338,17 @@ func schemaStatementsByDialect(dialect string) []string {
 		`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_area ON structured_memory_entries (wp_type_id, area)`,
 		`CREATE INDEX IF NOT EXISTS idx_structured_memory_type ON structured_memory_entries (wp_type_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_structured_memory_type_updated_at ON structured_memory_entries (wp_type_id, updated_at)`,
+		`CREATE TABLE IF NOT EXISTS structured_intent_memory_entries (
+			site_id INTEGER NOT NULL,
+			area TEXT NOT NULL DEFAULT '',
+			work_description TEXT NOT NULL DEFAULT '',
+			wp_type_ids_json TEXT NOT NULL,
+			source TEXT NOT NULL,
+			updated_at INTEGER NOT NULL,
+			PRIMARY KEY (site_id, area, work_description, source)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_structured_intent_memory_site ON structured_intent_memory_entries (site_id, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_structured_intent_memory_desc ON structured_intent_memory_entries (site_id, work_description)`,
 	}
 }
 
