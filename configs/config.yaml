@@ -22,8 +22,6 @@
 
 work_permit_api:
   base_url: http://110.40.170.130:8083
-  site_id: 28
-  user_id: 464
   timeout: 30s
   headers: {}
   confirm_wp_types: true

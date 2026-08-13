@@ -35,8 +35,6 @@ type ModelProviderConfig struct {
 
 type WorkPermitAPIConfig struct {
 	BaseURL                    string            `yaml:"base_url"`
-	SiteID                     int               `yaml:"site_id"`
-	UserID                     int               `yaml:"user_id"`
 	Timeout                    time.Duration     `yaml:"timeout"`
 	Headers                    map[string]string `yaml:"headers"`
 	ConfirmWpTypes             *bool             `yaml:"confirm_wp_types"`

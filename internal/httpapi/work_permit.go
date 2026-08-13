@@ -23,6 +23,8 @@ type WorkPermitRunner interface {
 type workPermitRequest struct {
 	SessionID     string             `json:"session_id"`
 	Input         string             `json:"input"`
+	SiteID        int                `json:"site_id"`
+	UserID        int                `json:"user_id"`
 	Approved      *bool              `json:"approved,omitempty"`
 	Confirmed     *bool              `json:"confirmed,omitempty"`
 	IntentWpTypes []graph.WpMetaInfo `json:"intent_wp_types,omitempty"`
@@ -54,8 +56,6 @@ type WorkPermitServer struct {
 	runner      WorkPermitRunner
 	promptStore graph.PromptStore
 	memoryStore graph.StructuredMemoryStore
-	siteID      int
-	userID      int
 
 	mu       sync.Mutex
 	sessions map[string]sessionState
@@ -64,30 +64,22 @@ type WorkPermitServer struct {
 func NewWorkPermitServer(runner WorkPermitRunner, args ...any) *WorkPermitServer {
 	var promptStore graph.PromptStore
 	var memoryStore graph.StructuredMemoryStore
-	var siteID int
-	var userID int
 
 	switch len(args) {
-	case 2:
-		siteID, _ = args[0].(int)
-		userID, _ = args[1].(int)
-	case 3:
+	case 1:
 		promptStore, _ = args[0].(graph.PromptStore)
-		siteID, _ = args[1].(int)
-		userID, _ = args[2].(int)
-	case 4:
+	case 2:
 		promptStore, _ = args[0].(graph.PromptStore)
 		memoryStore, _ = args[1].(graph.StructuredMemoryStore)
-		siteID, _ = args[2].(int)
-		userID, _ = args[3].(int)
+	case 3:
+		promptStore, _ = args[0].(graph.PromptStore)
+		memoryStore, _ = args[1].(graph.StructuredMemoryStore)
 	}
 
 	return &WorkPermitServer{
 		runner:      runner,
 		promptStore: promptStore,
 		memoryStore: memoryStore,
-		siteID:      siteID,
-		userID:      userID,
 		sessions:    make(map[string]sessionState),
 	}
 }
@@ -118,6 +110,10 @@ func (s *WorkPermitServer) handleCreateWorkPermit(c *gin.Context) {
 	}
 
 	request.Input = strings.TrimSpace(request.Input)
+	if request.SiteID <= 0 || request.UserID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "site_id and user_id are required"})
+		return
+	}
 	if strings.TrimSpace(request.SessionID) == "" {
 		s.handleInitialRequest(c, request)
 		return
@@ -209,8 +205,8 @@ func (s *WorkPermitServer) handleInitialRequest(c *gin.Context, request workPerm
 	state := &graph.WpGraphState{
 		SessionID: sessionID,
 		UserInput: request.Input,
-		SiteID:    s.siteID,
-		UserID:    s.userID,
+		SiteID:    request.SiteID,
+		UserID:    request.UserID,
 	}
 	output, err := s.runner.Invoke(c.Request.Context(), state, compose.WithCheckPointID(checkpointID))
 	s.writeRunResult(c, sessionID, checkpointID, output, err)
@@ -262,8 +258,8 @@ func (s *WorkPermitServer) handleResumeRequest(c *gin.Context, request workPermi
 	state := &graph.WpGraphState{
 		SessionID: request.SessionID,
 		UserInput: request.Input,
-		SiteID:    s.siteID,
-		UserID:    s.userID,
+		SiteID:    request.SiteID,
+		UserID:    request.UserID,
 	}
 	output, err := s.runner.Invoke(resumeContext, state, compose.WithCheckPointID(session.CheckpointID))
 	s.writeRunResult(c, request.SessionID, session.CheckpointID, output, err)

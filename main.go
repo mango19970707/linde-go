@@ -113,7 +113,7 @@ func run() error {
 		return fmt.Errorf("build work permit graph: %w", err)
 	}
 
-	server := httpapi.NewWorkPermitServer(runner, promptStore, cfg.WorkPermitAPI.SiteID, cfg.WorkPermitAPI.UserID)
+	server := httpapi.NewWorkPermitServer(runner, promptStore)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "7070"

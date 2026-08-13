@@ -49,8 +49,6 @@ func ToolConfigFromAppConfig(cfg *appconfig.AppConfig) ToolConfig {
 
 	return ToolConfig{
 		BaseURL: cfg.WorkPermitAPI.BaseURL,
-		SiteID:  cfg.WorkPermitAPI.SiteID,
-		UserID:  cfg.WorkPermitAPI.UserID,
 		Timeout: cfg.WorkPermitAPI.Timeout,
 		Headers: headers,
 	}

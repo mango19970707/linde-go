@@ -34,8 +34,8 @@ func TestWorkPermitHandlerReturnsNeedMoreInfo(t *testing.T) {
 		return nil, interruptErr
 	}
 
-	server := NewWorkPermitServer(runner, nil, 28, 464)
-	rec := postJSON(server, `{"input":"initial work description"}`)
+	server := NewWorkPermitServer(runner, nil)
+	rec := postJSON(server, `{"input":"initial work description","site_id":28,"user_id":464}`)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
@@ -71,11 +71,11 @@ func TestWorkPermitHandlerResumesWithSupplement(t *testing.T) {
 		return &graph.WpGraphState{CurrentNode: "intentRecognition"}, nil
 	}
 
-	server := NewWorkPermitServer(runner, nil, 28, 464)
-	first := postJSON(server, `{"input":"initial work description"}`)
+	server := NewWorkPermitServer(runner, nil)
+	first := postJSON(server, `{"input":"initial work description","site_id":28,"user_id":464}`)
 	firstResponse := decodeResponse(t, first)
 
-	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","input":"start at 08:00"}`)
+	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","input":"start at 08:00","site_id":28,"user_id":464}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -101,8 +101,8 @@ func TestWorkPermitHandlerReturnsApprovalPreview(t *testing.T) {
 		return nil, interruptErr
 	}
 
-	server := NewWorkPermitServer(runner, nil, 28, 464)
-	rec := postJSON(server, `{"input":"complete work description"}`)
+	server := NewWorkPermitServer(runner, nil)
+	rec := postJSON(server, `{"input":"complete work description","site_id":28,"user_id":464}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -128,8 +128,8 @@ func TestWorkPermitHandlerReturnsWpTypeConfirmation(t *testing.T) {
 		return nil, interruptErr
 	}
 
-	server := NewWorkPermitServer(runner, nil, 28, 464)
-	rec := postJSON(server, `{"input":"complete work description"}`)
+	server := NewWorkPermitServer(runner, nil)
+	rec := postJSON(server, `{"input":"complete work description","site_id":28,"user_id":464}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -156,11 +156,11 @@ func TestWorkPermitHandlerResumesWpTypeConfirmation(t *testing.T) {
 		return &graph.WpGraphState{CurrentNode: "intentRecognition"}, nil
 	}
 
-	server := NewWorkPermitServer(runner, nil, 28, 464)
-	first := postJSON(server, `{"input":"complete work description"}`)
+	server := NewWorkPermitServer(runner, nil)
+	first := postJSON(server, `{"input":"complete work description","site_id":28,"user_id":464}`)
 	firstResponse := decodeResponse(t, first)
 
-	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","confirmed":true,"intent_wp_types":[{"id":243,"templetname":"permit","wptypename":"PTW800","wptypeid":23}]}`)
+	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","confirmed":true,"intent_wp_types":[{"id":243,"templetname":"permit","wptypename":"PTW800","wptypeid":23}],"site_id":28,"user_id":464}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -187,11 +187,11 @@ func TestWorkPermitHandlerResumesApprovalWithFullPayloads(t *testing.T) {
 		return &graph.WpGraphState{CurrentNode: "submitWps"}, nil
 	}
 
-	server := NewWorkPermitServer(runner, nil, 28, 464)
-	first := postJSON(server, `{"input":"complete work description"}`)
+	server := NewWorkPermitServer(runner, nil)
+	first := postJSON(server, `{"input":"complete work description","site_id":28,"user_id":464}`)
 	firstResponse := decodeResponse(t, first)
 
-	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","approved":true,"payloads":[{"id":0,"wptypeid":23}]}`)
+	rec := postJSON(server, `{"session_id":"`+firstResponse.SessionID+`","approved":true,"payloads":[{"id":0,"wptypeid":23}],"site_id":28,"user_id":464}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -259,7 +259,7 @@ func TestStructuredMemoryImportHandlerPersistsPayloads(t *testing.T) {
 	t.Parallel()
 
 	store := &recordingStructuredMemoryStore{}
-	server := NewWorkPermitServer(nil, nil, store, 28, 464)
+	server := NewWorkPermitServer(nil, nil, store)
 
 	rec := postJSONTo(server, "/api/structured-memory/import", `{"payloads":[{"wptempletid":172,"wptypeid":2,"wptypename":"一级动火","sqxx":[{"name":"wpname","label":"作业名称","type":"input","value":"空分东侧动火"},{"name":"discription","label":"作业内容描述","type":"input","value":"焊接支架"},{"name":"areaid","label":"所属区域","type":"selector","value":[{"id":1,"name":"空分东侧"}]}]}]}`)
 	if rec.Code != http.StatusOK {
@@ -301,7 +301,7 @@ func TestStructuredMemoryExportHandlerReturnsPayloadsByTypeAndArea(t *testing.T)
 			{WpTypeID: 2, WpTypeName: "一级动火", Area: "空分东侧", WorkDescription: "焊接支架", FieldDescription: "所属区域", FieldName: "sqxx.2.value", FieldValue: []any{map[string]any{"id": 1, "name": "空分东侧"}}, Source: "import-1", UpdatedAt: 1},
 		},
 	}
-	server := NewWorkPermitServer(nil, nil, store, 28, 464)
+	server := NewWorkPermitServer(nil, nil, store)
 
 	values := url.Values{}
 	values.Set("wp_type_id", "2")
@@ -351,6 +351,46 @@ func get(server *WorkPermitServer, target string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	server.Router().ServeHTTP(rec, req)
 	return rec
+}
+
+func TestWorkPermitHandlerRejectsMissingSiteOrUserID(t *testing.T) {
+	t.Parallel()
+
+	server := NewWorkPermitServer(&recordingRunner{}, nil)
+	rec := postJSON(server, `{"input":"initial work description"}`)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "site_id and user_id are required") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestWorkPermitHandlerPassesSiteAndUserIDFromRequest(t *testing.T) {
+	t.Parallel()
+
+	runner := &recordingRunner{}
+	runner.call = func(ctx context.Context, input *graph.WpGraphState, opts ...compose.Option) (*graph.WpGraphState, error) {
+		return &graph.WpGraphState{SessionID: input.SessionID}, nil
+	}
+
+	server := NewWorkPermitServer(runner, nil)
+	rec := postJSON(server, `{"input":"initial work description","site_id":123,"user_id":456}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(runner.inputs) != 1 {
+		t.Fatalf("inputs = %#v", runner.inputs)
+	}
+
+	state, ok := runner.inputs[0].(*graph.WpGraphState)
+	if !ok {
+		t.Fatalf("input type = %T", runner.inputs[0])
+	}
+	if state.SiteID != 123 || state.UserID != 456 {
+		t.Fatalf("state IDs = (%d, %d)", state.SiteID, state.UserID)
+	}
 }
 
 func decodeResponse(t *testing.T, rec *httptest.ResponseRecorder) workPermitResponse {
