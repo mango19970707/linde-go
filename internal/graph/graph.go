@@ -149,23 +149,25 @@ type WpInfoSupplement struct {
 }
 
 type WpGraphState struct {
-	SessionID        string
-	CurrentNode      string
-	UserInput        string
-	SiteID           int
-	UserID           int
-	Area             string
-	StartTime        string
-	EndTime          string
-	Description      string
-	Equipments       []EquipmentInfo
-	WpCompany        WpCompanyInfo
-	IntentWpTypes    []WpMetaInfo
-	WpTemplates      []WpTemplate
-	FilledWps        []FilledWp
-	ValidationStatus string
-	ErrorMsg         string
-	RetryCount       int
+	SessionID             string
+	CurrentNode           string
+	UserInput             string
+	InitialUserInput      string
+	LatestSupplementInput string
+	SiteID                int
+	UserID                int
+	Area                  string
+	StartTime             string
+	EndTime               string
+	Description           string
+	Equipments            []EquipmentInfo
+	WpCompany             WpCompanyInfo
+	IntentWpTypes         []WpMetaInfo
+	WpTemplates           []WpTemplate
+	FilledWps             []FilledWp
+	ValidationStatus      string
+	ErrorMsg              string
+	RetryCount            int
 }
 
 func init() {
@@ -179,11 +181,12 @@ func newAskWpInfoNode(extractor WpInfoExtractor) func(context.Context, *WpGraphS
 		}
 
 		state.CurrentNode = nodeAskWpInfo
-		if strings.TrimSpace(state.UserInput) == "" {
+		extractionInput := buildWpExtractionInput(state)
+		if extractionInput == "" {
 			return state, nil
 		}
 
-		extracted, err := extractor.Extract(ctx, state.UserInput)
+		extracted, err := extractor.Extract(ctx, extractionInput)
 		if err != nil {
 			return nil, fmt.Errorf("extract work permit info: %w", err)
 		}
@@ -218,10 +221,22 @@ func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState
 		if !hasData || strings.TrimSpace(supplement.Input) == "" {
 			return nil, fmt.Errorf("work permit info supplement is missing")
 		}
-		state.UserInput = strings.TrimSpace(supplement.Input)
+		trimmedSupplement := strings.TrimSpace(supplement.Input)
+		if strings.TrimSpace(state.InitialUserInput) == "" {
+			state.InitialUserInput = strings.TrimSpace(state.UserInput)
+		}
+		state.UserInput = trimmedSupplement
+		state.LatestSupplementInput = trimmedSupplement
 		state.ValidationStatus = validationInvalid
 		state.ErrorMsg = ""
 		return state, nil
+	}
+
+	if strings.TrimSpace(state.InitialUserInput) == "" {
+		state.InitialUserInput = strings.TrimSpace(state.UserInput)
+	}
+	if strings.TrimSpace(state.UserInput) != "" && strings.TrimSpace(state.UserInput) != strings.TrimSpace(state.InitialUserInput) {
+		state.LatestSupplementInput = strings.TrimSpace(state.UserInput)
 	}
 
 	missingFields := make([]string, 0, 6)
@@ -251,6 +266,30 @@ func validateWpInfoNode(ctx context.Context, state *WpGraphState) (*WpGraphState
 	state.ValidationStatus = validationValid
 	state.ErrorMsg = ""
 	return state, nil
+}
+
+func buildWpExtractionInput(state *WpGraphState) string {
+	if state == nil {
+		return ""
+	}
+
+	initial := strings.TrimSpace(state.InitialUserInput)
+	current := strings.TrimSpace(state.UserInput)
+	latestSupplement := strings.TrimSpace(state.LatestSupplementInput)
+
+	if initial == "" {
+		initial = current
+	}
+	if latestSupplement == "" && current != "" && current != initial {
+		latestSupplement = current
+	}
+	if initial == "" {
+		return ""
+	}
+	if latestSupplement == "" || latestSupplement == initial {
+		return initial
+	}
+	return initial + "\n补充信息：" + latestSupplement
 }
 
 func newIntentRecognitionNode(templateTool einotool.InvokableTool, memoryStore StructuredMemoryStore, recognizer WpTypeRecognizer, args ...any) func(context.Context, *WpGraphState) (*WpGraphState, error) {

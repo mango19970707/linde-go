@@ -32,6 +32,14 @@ func (s *recordingWpInfoExtractor) Extract(ctx context.Context, input string) (W
 	if s.err != nil {
 		return WpInfoExtraction{}, s.err
 	}
+	if result, ok := s.results[input]; ok {
+		return result, nil
+	}
+	if _, supplement, found := strings.Cut(input, "\n补充信息："); found {
+		if result, ok := s.results[supplement]; ok {
+			return result, nil
+		}
+	}
 	return s.results[input], nil
 }
 
@@ -126,6 +134,46 @@ func TestAskWpInfoNodeMergesSupplementInsteadOfClearingExistingFields(t *testing
 	}
 	if got.Description != "动火作业" {
 		t.Fatalf("Description = %q", got.Description)
+	}
+	if got.StartTime != "2026/08/04-08:00:00" || got.EndTime != "2026/08/04-17:00:00" {
+		t.Fatalf("times = %q - %q", got.StartTime, got.EndTime)
+	}
+}
+
+func TestAskWpInfoNodeCombinesInitialAndSupplementInputs(t *testing.T) {
+	t.Parallel()
+
+	const combinedInput = "初始输入\n补充信息：补充时间"
+
+	extractor := &recordingWpInfoExtractor{
+		results: map[string]WpInfoExtraction{
+			combinedInput: {
+				StartTime: "2026/08/04-08:00:00",
+				EndTime:   "2026/08/04-17:00:00",
+			},
+		},
+	}
+	node := newAskWpInfoNode(extractor)
+
+	state := &WpGraphState{
+		UserInput:             "补充时间",
+		InitialUserInput:      "初始输入",
+		LatestSupplementInput: "补充时间",
+		Area:                  "公共区域",
+		Description:           "动火作业",
+		ValidationStatus:      validationInvalid,
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newAskWpInfoNode() error = %v", err)
+	}
+
+	if len(extractor.inputs) != 1 {
+		t.Fatalf("extractor inputs = %#v", extractor.inputs)
+	}
+	if extractor.inputs[0] != combinedInput {
+		t.Fatalf("extractor input = %q, want %q", extractor.inputs[0], combinedInput)
 	}
 	if got.StartTime != "2026/08/04-08:00:00" || got.EndTime != "2026/08/04-17:00:00" {
 		t.Fatalf("times = %q - %q", got.StartTime, got.EndTime)
@@ -260,6 +308,12 @@ func TestBuildWpGraphResumesAfterSupplementalInput(t *testing.T) {
 	if len(extractor.inputs) != 2 {
 		t.Fatalf("extractor inputs = %#v", extractor.inputs)
 	}
+	if !strings.Contains(extractor.inputs[1], "\n补充信息：") {
+		t.Fatalf("second extractor input = %q", extractor.inputs[1])
+	}
+	if !strings.Contains(extractor.inputs[1], "初始输入") {
+		t.Fatalf("second extractor input = %q", extractor.inputs[1])
+	}
 }
 
 func DisabledBuildWpGraphResumesApprovalAfterSubmitInterrupt(t *testing.T) {
@@ -274,7 +328,7 @@ func DisabledBuildWpGraphResumesApprovalAfterSubmitInterrupt(t *testing.T) {
 				AreaName:    "A鍖?",
 				Description: "鍔ㄧ伀浣滀笟",
 			},
-			"琛ュ厖鏃堕棿锛?026/08/04-08:00:00 鍒?2026/08/04-17:00:00": {
+			"鍒濆杈撳叆\n补充信息：琛ュ厖鏃堕棿锛?026/08/04-08:00:00 鍒?2026/08/04-17:00:00": {
 				StartTime: "2026/08/04-08:00:00",
 				EndTime:   "2026/08/04-17:00:00",
 			},
