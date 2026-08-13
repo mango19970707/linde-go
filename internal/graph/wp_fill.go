@@ -20,6 +20,7 @@ const (
 	structuredMemorySourceAreaGuess = "structured_memory_area_guess"
 	llmFallbackSource               = "llm_fallback"
 	locationGuessMinConfidence      = 0.70
+	structuredMemoryMinScore        = 10
 )
 
 type fillCandidateField struct {
@@ -48,6 +49,7 @@ type structuredMemorySample struct {
 	Area            string         `json:"area"`
 	WorkDescription string         `json:"work_description"`
 	Source          string         `json:"source"`
+	UpdatedAt       int64          `json:"updated_at"`
 	Fields          map[string]any `json:"fields"`
 }
 
@@ -153,14 +155,14 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 	// step 2：优先使用图状态中的明确字段值进行填充。
 	fillStateFields(fields, state, &filledFields, filledPathSet)
 
-	// step 3：优先按作业票类型 + 区域精确查询结构化记忆，并按字段路径回填。
+	// step 3：优先按作业票类型 + 区域精确查询结构化记忆，再按作业内容描述筛选最匹配样本回填。
 	exactEntries, err := memoryStore.FindByTypeAndArea(ctx, template.WpTypeID, strings.TrimSpace(state.Area))
 	if err != nil {
 		return FilledWp{}, fmt.Errorf("find structured memory by type and area for template %d: %w", template.ID, err)
 	}
-	applyStructuredMemoryEntries(content, fieldsByPath, exactEntries, structuredMemorySourceExact, &filledFields, filledPathSet)
+	applyBestStructuredMemorySample(content, fieldsByPath, state, exactEntries, structuredMemorySourceExact, &filledFields, filledPathSet)
 
-	// step 4：如果精确地点没有命中，则按作业票类型列出候选地点，让大模型选择最可能地点后再回填。
+	// step 4：如果精确地点没有命中，则按作业票类型列出候选地点，让大模型选择最可能地点，再按作业内容筛选样本后回填。
 	if len(exactEntries) == 0 {
 		candidateAreas, err := memoryStore.ListAreasByType(ctx, template.WpTypeID)
 		if err != nil {
@@ -177,25 +179,20 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 			if err != nil {
 				return FilledWp{}, fmt.Errorf("find structured memory by guessed area for template %d: %w", template.ID, err)
 			}
-			applyStructuredMemoryEntries(content, fieldsByPath, guessedEntries, structuredMemorySourceAreaGuess, &filledFields, filledPathSet)
+			applyBestStructuredMemorySample(content, fieldsByPath, state, guessedEntries, structuredMemorySourceAreaGuess, &filledFields, filledPathSet)
 		}
 	}
 
-	// step 5：如果仍存在必填空字段，则参考同类型历史样本，让大模型只返回字段路径到字段值的映射。
+	// step 5：如果仍存在必填空字段，则先按作业票类型查询历史，再按作业内容描述挑选最匹配样本回填；匹配不到则不填。
 	requiredPaths := collectMissingRequiredPaths(fieldsByPath, filledPathSet)
 	if len(requiredPaths) > 0 {
 		historyEntries, err := memoryStore.FindByType(ctx, template.WpTypeID)
 		if err != nil {
 			return FilledWp{}, fmt.Errorf("find structured memory history for template %d: %w", template.ID, err)
 		}
-		historySamples := buildStructuredMemorySamples(historyEntries)
-		fallbackValues, err := helper.fillFields(ctx, template, state, fieldsByPath, requiredPaths, historySamples)
-		if err != nil {
-			if !isRecoverableLLMEnrichmentError(ctx, err) {
-				return FilledWp{}, fmt.Errorf("fill required fields with llm for template %d: %w", template.ID, err)
-			}
-		} else {
-			applyResolvedValues(fieldsByPath, fallbackValues, llmFallbackSource, &filledFields, filledPathSet)
+		bestSample := selectBestStructuredMemorySample(buildStructuredMemorySamples(historyEntries), state.Description, "")
+		if bestSample != nil {
+			applyResolvedValues(fieldsByPath, bestSample.Fields, llmFallbackSource, &filledFields, filledPathSet)
 		}
 	}
 
@@ -324,6 +321,22 @@ func applyStructuredMemoryEntries(content map[string]any, fieldsByPath map[strin
 	return filledCount
 }
 
+func applyBestStructuredMemorySample(content map[string]any, fieldsByPath map[string]*fillCandidateField, state *WpGraphState, entries []StructuredMemoryEntry, source string, filledFields *[]FilledField, filledPathSet map[string]struct{}) int {
+	bestSample := selectBestStructuredMemorySample(buildStructuredMemorySamples(entries), state.Description, state.Area)
+	if bestSample == nil {
+		return 0
+	}
+
+	sampleEntries := make([]StructuredMemoryEntry, 0, len(bestSample.Fields))
+	for path, value := range bestSample.Fields {
+		sampleEntries = append(sampleEntries, StructuredMemoryEntry{
+			FieldName:  path,
+			FieldValue: value,
+		})
+	}
+	return applyStructuredMemoryEntries(content, fieldsByPath, sampleEntries, source, filledFields, filledPathSet)
+}
+
 func chooseLatestMemoryEntries(entries []StructuredMemoryEntry) []StructuredMemoryEntry {
 	index := make(map[string]StructuredMemoryEntry, len(entries))
 	for _, entry := range entries {
@@ -380,6 +393,9 @@ func buildStructuredMemorySamples(entries []StructuredMemoryEntry) []structuredM
 			}
 			index[key] = sample
 		}
+		if entry.UpdatedAt > sample.UpdatedAt {
+			sample.UpdatedAt = entry.UpdatedAt
+		}
 		sample.Fields[entry.FieldName] = entry.FieldValue
 	}
 	samples := make([]structuredMemorySample, 0, len(index))
@@ -387,6 +403,76 @@ func buildStructuredMemorySamples(entries []StructuredMemoryEntry) []structuredM
 		samples = append(samples, *sample)
 	}
 	return samples
+}
+
+func selectBestStructuredMemorySample(samples []structuredMemorySample, description, area string) *structuredMemorySample {
+	if len(samples) == 0 {
+		return nil
+	}
+
+	description = strings.TrimSpace(description)
+	if description == "" {
+		return nil
+	}
+
+	type scoredSample struct {
+		sample structuredMemorySample
+		score  int
+	}
+
+	scored := make([]scoredSample, 0, len(samples))
+	for _, sample := range samples {
+		score := scoreStructuredMemorySample(description, area, sample)
+		if score < structuredMemoryMinScore {
+			continue
+		}
+		scored = append(scored, scoredSample{sample: sample, score: score})
+	}
+	if len(scored) == 0 {
+		return nil
+	}
+
+	slices.SortStableFunc(scored, func(left, right scoredSample) int {
+		if left.score != right.score {
+			return right.score - left.score
+		}
+		leftUpdatedAt := left.sample.UpdatedAt
+		rightUpdatedAt := right.sample.UpdatedAt
+		switch {
+		case leftUpdatedAt > rightUpdatedAt:
+			return -1
+		case leftUpdatedAt < rightUpdatedAt:
+			return 1
+		default:
+			return strings.Compare(left.sample.WorkDescription, right.sample.WorkDescription)
+		}
+	})
+
+	if len(scored) > 1 && scored[0].score == scored[1].score {
+		return nil
+	}
+
+	bestSample := scored[0].sample
+	return &bestSample
+}
+
+func scoreStructuredMemorySample(description, area string, sample structuredMemorySample) int {
+	score := textSimilarityScore(normalizeIntentText(description), normalizeIntentText(sample.WorkDescription))
+	if score == 0 {
+		return 0
+	}
+
+	normalizedArea := normalizeIntentText(area)
+	sampleArea := normalizeIntentText(sample.Area)
+	if normalizedArea != "" && sampleArea != "" {
+		if normalizedArea == sampleArea {
+			score += 3
+		} else if strings.Contains(normalizedArea, sampleArea) || strings.Contains(sampleArea, normalizedArea) {
+			score += 1
+		}
+	}
+
+	return score
 }
 
 func (h wpFillLLMHelper) selectClosestArea(ctx context.Context, template WpTemplate, state *WpGraphState, candidateAreas []string) (string, float64, error) {
@@ -445,13 +531,13 @@ func (h wpFillLLMHelper) fillFields(ctx context.Context, template WpTemplate, st
 	}
 
 	payload, err := json.Marshal(map[string]any{
-		"wp_type_name":      readableWpType(template),
-		"template_name":     template.Name,
-		"area":              strings.TrimSpace(state.Area),
-		"description":       strings.TrimSpace(state.Description),
-		"start_time":        strings.TrimSpace(state.StartTime),
-		"end_time":          strings.TrimSpace(state.EndTime),
-		"required_fields":   requiredFields,
+		"wp_type_name":       readableWpType(template),
+		"template_name":      template.Name,
+		"area":               strings.TrimSpace(state.Area),
+		"description":        strings.TrimSpace(state.Description),
+		"start_time":         strings.TrimSpace(state.StartTime),
+		"end_time":           strings.TrimSpace(state.EndTime),
+		"required_fields":    requiredFields,
 		"structured_samples": historySamples,
 	})
 	if err != nil {

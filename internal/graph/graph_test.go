@@ -777,8 +777,9 @@ func TestFillWpsNodePrefersStateThenMemoryThenBlank(t *testing.T) {
 		},
 	}, stubStructuredMemoryStore{
 		entries: []StructuredMemoryEntry{
-			{WpTypeID: 23, Area: "空分装置", FieldName: "sqxx.6.value", FieldValue: "历史区域点位", Source: "structured_memory", UpdatedAt: 2},
-			{WpTypeID: 23, Area: "空分装置", FieldName: "sqxx.7.value", FieldValue: "13800138000", Source: "structured_memory", UpdatedAt: 3},
+			{WpTypeID: 23, Area: "空分装置", WorkDescription: "动火检修", FieldName: "sqxx.6.value", FieldValue: "历史区域点位", Source: "structured_memory", UpdatedAt: 2},
+			{WpTypeID: 23, Area: "空分装置", WorkDescription: "动火检修", FieldName: "sqxx.7.value", FieldValue: "13800138000", Source: "structured_memory", UpdatedAt: 3},
+			{WpTypeID: 23, Area: "空分装置", WorkDescription: "动火检修", FieldName: "sqxx.8.value", FieldValue: "13900000000", Source: "structured_memory", UpdatedAt: 4},
 		},
 	}, WpFillRules{})
 

@@ -151,6 +151,165 @@ func TestFillWpsNodeUsesAreaGuessStructuredMemory(t *testing.T) {
 	}
 }
 
+func TestFillWpsNodeUsesMostSimilarDescriptionWithinExactArea(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{}, stubStructuredMemoryStore{
+		entries: []StructuredMemoryEntry{
+			{
+				WpTypeID:        23,
+				Area:            "空分装置",
+				WorkDescription: "空分巡检",
+				FieldName:       "sqxx.0.value",
+				FieldValue:      "巡检地点",
+				UpdatedAt:       20,
+			},
+			{
+				WpTypeID:        23,
+				Area:            "空分装置",
+				WorkDescription: "空分装置动火检修",
+				FieldName:       "sqxx.0.value",
+				FieldValue:      "动火检修地点",
+				UpdatedAt:       10,
+			},
+		},
+	}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "空分装置",
+		Description: "空分装置动火检修",
+		WpTemplates: []WpTemplate{{
+			ID:       243,
+			WpTypeID: 23,
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":  "wpplace",
+						"label": "作业地点",
+						"type":  "input",
+						"value": "",
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	value := got.FilledWps[0].Content.(map[string]any)["sqxx"].([]any)[0].(map[string]any)["value"]
+	if value != "动火检修地点" {
+		t.Fatalf("sqxx.0.value = %#v", value)
+	}
+}
+
+func TestFillWpsNodeDoesNotUseDescriptionMismatchedMemory(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{}, stubStructuredMemoryStore{
+		entries: []StructuredMemoryEntry{
+			{
+				WpTypeID:        23,
+				Area:            "空分装置",
+				WorkDescription: "空分巡检",
+				FieldName:       "sqxx.0.value",
+				FieldValue:      "巡检地点",
+				UpdatedAt:       20,
+			},
+		},
+	}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "空分装置",
+		Description: "压缩机大修",
+		WpTemplates: []WpTemplate{{
+			ID:       243,
+			WpTypeID: 23,
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":     "wpplace",
+						"label":    "作业地点",
+						"type":     "input",
+						"value":    "",
+						"required": true,
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	value := got.FilledWps[0].Content.(map[string]any)["sqxx"].([]any)[0].(map[string]any)["value"]
+	if value != "" {
+		t.Fatalf("sqxx.0.value = %#v, want blank", value)
+	}
+	if len(got.FilledWps[0].UnfilledFields) != 1 {
+		t.Fatalf("UnfilledFields = %#v", got.FilledWps[0].UnfilledFields)
+	}
+}
+
+func TestFillWpsNodeUsesMostSimilarDescriptionForRequiredFallback(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{}, stubStructuredMemoryStore{
+		entries: []StructuredMemoryEntry{
+			{
+				WpTypeID:        23,
+				Area:            "空分装置",
+				WorkDescription: "空分巡检",
+				FieldName:       "sqxx.0.value",
+				FieldValue:      "巡检联系人",
+				UpdatedAt:       20,
+			},
+			{
+				WpTypeID:        23,
+				Area:            "压缩机区域",
+				WorkDescription: "压缩机大修",
+				FieldName:       "sqxx.0.value",
+				FieldValue:      "大修联系人",
+				UpdatedAt:       10,
+			},
+		},
+	}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "未知区域",
+		Description: "压缩机大修",
+		WpTemplates: []WpTemplate{{
+			ID:       243,
+			WpTypeID: 23,
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":     "contact",
+						"label":    "联系人",
+						"type":     "input",
+						"value":    "",
+						"required": true,
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	value := got.FilledWps[0].Content.(map[string]any)["sqxx"].([]any)[0].(map[string]any)["value"]
+	if value != "大修联系人" {
+		t.Fatalf("sqxx.0.value = %#v", value)
+	}
+}
+
 func TestFillWpsNodeIgnoresLLMFillTimeout(t *testing.T) {
 	t.Parallel()
 
