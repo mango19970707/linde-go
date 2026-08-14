@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -13,6 +14,7 @@ import (
 	einotool "github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
+	"linde-go-v2/internal/sessionrecorder"
 )
 
 const (
@@ -168,6 +170,28 @@ type WpGraphState struct {
 	ValidationStatus      string
 	ErrorMsg              string
 	RetryCount            int
+}
+
+type sessionRecorderOption struct {
+	recorder *sessionrecorder.Recorder
+}
+
+func WithSessionRecorder(recorder *sessionrecorder.Recorder) any {
+	return sessionRecorderOption{recorder: recorder}
+}
+
+func WrapChatModelWithSessionRecorder(inner model.BaseChatModel, recorder *sessionrecorder.Recorder) model.BaseChatModel {
+	if inner == nil || recorder == nil {
+		return inner
+	}
+	return &sessionRecordedChatModel{inner: inner, recorder: recorder}
+}
+
+func WrapToolWithSessionRecorder(inner einotool.InvokableTool, recorder *sessionrecorder.Recorder) einotool.InvokableTool {
+	if inner == nil || recorder == nil {
+		return inner
+	}
+	return &sessionRecordedTool{inner: inner, recorder: recorder}
 }
 
 func init() {
@@ -562,6 +586,7 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 	var fillRules WpFillRules
 	var updateWpInfoTool einotool.InvokableTool
 	var linkWpInfoTool einotool.InvokableTool
+	var recorder *sessionrecorder.Recorder
 	retrievalConfig := IntentMemoryRetrievalConfig{ScoreThreshold: 10, TopN: 5}
 	confirmWpTypes := true
 	graphOptions := make([]compose.GraphCompileOption, 0)
@@ -600,6 +625,10 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 				}
 				if value, ok := arg.(bool); ok {
 					confirmWpTypes = value
+					continue
+				}
+				if value, ok := arg.(sessionRecorderOption); ok {
+					recorder = value.recorder
 					continue
 				}
 				option, ok := arg.(compose.GraphCompileOption)
@@ -649,6 +678,10 @@ func BuildWpGraph(extractor WpInfoExtractor, templateTool einotool.InvokableTool
 			}
 			if value, ok := arg.(bool); ok {
 				confirmWpTypes = value
+				continue
+			}
+			if value, ok := arg.(sessionRecorderOption); ok {
+				recorder = value.recorder
 				continue
 			}
 			option, ok := arg.(compose.GraphCompileOption)
@@ -726,7 +759,7 @@ parsed:
 
 	return &traceableWpGraphRunnable{
 		inner:   runnable,
-		handler: newWpGraphTraceHandler(),
+		handler: newWpGraphTraceHandler(recorder),
 	}, nil
 }
 
@@ -772,6 +805,51 @@ type traceableWpGraphRunnable struct {
 	handler callbacks.Handler
 }
 
+type sessionRecordedChatModel struct {
+	inner    model.BaseChatModel
+	recorder *sessionrecorder.Recorder
+}
+
+func (m *sessionRecordedChatModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	for _, message := range input {
+		recordSchemaMessageFromRecorder(ctx, m.recorder, message)
+	}
+
+	output, err := m.inner.Generate(ctx, input, opts...)
+	if err != nil {
+		return nil, err
+	}
+	recordSchemaMessageFromRecorder(ctx, m.recorder, output)
+	return output, nil
+}
+
+func (m *sessionRecordedChatModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	for _, message := range input {
+		recordSchemaMessageFromRecorder(ctx, m.recorder, message)
+	}
+	return m.inner.Stream(ctx, input, opts...)
+}
+
+type sessionRecordedTool struct {
+	inner    einotool.InvokableTool
+	recorder *sessionrecorder.Recorder
+}
+
+func (t *sessionRecordedTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
+	return t.inner.Info(ctx)
+}
+
+func (t *sessionRecordedTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...einotool.Option) (string, error) {
+	recordTranscriptEventFromRecorder(ctx, t.recorder, "tool_call", argumentsInJSON)
+
+	output, err := t.inner.InvokableRun(ctx, argumentsInJSON, opts...)
+	if err != nil {
+		return "", err
+	}
+	recordTranscriptEventFromRecorder(ctx, t.recorder, "tool_output", output)
+	return output, nil
+}
+
 func (r *traceableWpGraphRunnable) Invoke(ctx context.Context, input *WpGraphState, opts ...compose.Option) (*WpGraphState, error) {
 	if r.handler != nil {
 		opts = append(opts, compose.WithCallbacks(r.handler))
@@ -807,13 +885,14 @@ type wpTraceMeta struct {
 	startAt time.Time
 }
 
-func newWpGraphTraceHandler() callbacks.Handler {
+func newWpGraphTraceHandler(recorder *sessionrecorder.Recorder) callbacks.Handler {
 	return callbacks.NewHandlerBuilder().
 		OnStartFn(func(ctx context.Context, info *callbacks.RunInfo, input callbacks.CallbackInput) context.Context {
 			meta := wpTraceMeta{
 				traceID: extractTraceID(input),
 				startAt: time.Now(),
 			}
+			recordGraphCallbackInput(ctx, recorder, input)
 			if info != nil && info.Name != "" {
 				slog.Info("wp_graph_start",
 					slog.String("trace", meta.traceID),
@@ -824,6 +903,7 @@ func newWpGraphTraceHandler() callbacks.Handler {
 		}).
 		OnEndFn(func(ctx context.Context, info *callbacks.RunInfo, output callbacks.CallbackOutput) context.Context {
 			meta, _ := ctx.Value(wpTraceKey{}).(wpTraceMeta)
+			recordGraphCallbackOutput(ctx, recorder, output)
 			if info != nil && info.Name != "" {
 				slog.Info("wp_graph_end",
 					slog.String("trace", fallbackTraceID(meta.traceID)),
@@ -869,4 +949,122 @@ func compactTraceError(err error) string {
 		return ""
 	}
 	return strings.Join(strings.Fields(err.Error()), " ")
+}
+
+func recordGraphCallbackInput(ctx context.Context, recorder *sessionrecorder.Recorder, input callbacks.CallbackInput) {
+	if recorder == nil {
+		return
+	}
+
+	sessionID, ok := sessionrecorder.SessionIDFromContext(ctx)
+	if !ok {
+		return
+	}
+
+	if modelInput := model.ConvCallbackInput(input); modelInput != nil {
+		for _, message := range modelInput.Messages {
+			recordSchemaMessage(sessionID, recorder, message)
+		}
+		return
+	}
+
+	if toolInput := einotool.ConvCallbackInput(input); toolInput != nil {
+		recordTranscriptEvent(sessionID, recorder, "tool_call", toolInput.ArgumentsInJSON)
+	}
+}
+
+func recordGraphCallbackOutput(ctx context.Context, recorder *sessionrecorder.Recorder, output callbacks.CallbackOutput) {
+	if recorder == nil {
+		return
+	}
+
+	sessionID, ok := sessionrecorder.SessionIDFromContext(ctx)
+	if !ok {
+		return
+	}
+
+	if modelOutput := model.ConvCallbackOutput(output); modelOutput != nil && modelOutput.Message != nil {
+		recordSchemaMessage(sessionID, recorder, modelOutput.Message)
+		return
+	}
+
+	if toolOutput := einotool.ConvCallbackOutput(output); toolOutput != nil {
+		if toolOutput.Response != "" {
+			recordTranscriptEvent(sessionID, recorder, "tool_output", toolOutput.Response)
+			return
+		}
+		if toolOutput.ToolOutput != nil {
+			raw, err := json.Marshal(toolOutput.ToolOutput)
+			if err != nil {
+				recordTranscriptEvent(sessionID, recorder, "tool_output", fmt.Sprintf("%v", toolOutput.ToolOutput))
+				return
+			}
+			recordTranscriptEvent(sessionID, recorder, "tool_output", string(raw))
+		}
+	}
+}
+
+func recordSchemaMessageFromRecorder(ctx context.Context, recorder *sessionrecorder.Recorder, message *schema.Message) {
+	if recorder == nil {
+		return
+	}
+	sessionID, ok := sessionrecorder.SessionIDFromContext(ctx)
+	if !ok {
+		return
+	}
+	recordSchemaMessage(sessionID, recorder, message)
+}
+
+func recordSchemaMessage(sessionID string, recorder *sessionrecorder.Recorder, message *schema.Message) {
+	if message == nil {
+		return
+	}
+
+	switch message.Role {
+	case schema.System:
+		recordTranscriptEvent(sessionID, recorder, "system_message", message.Content)
+	case schema.User:
+		recordTranscriptEvent(sessionID, recorder, "user_message", message.Content)
+	case schema.Assistant:
+		recordTranscriptEvent(sessionID, recorder, "assistant_message", message.Content)
+		for _, toolCall := range message.ToolCalls {
+			raw, err := json.Marshal(toolCall)
+			if err != nil {
+				recordTranscriptEvent(sessionID, recorder, "tool_call", fmt.Sprintf("%+v", toolCall))
+				continue
+			}
+			recordTranscriptEvent(sessionID, recorder, "tool_call", string(raw))
+		}
+	case schema.Tool:
+		recordTranscriptEvent(sessionID, recorder, "tool_output", message.Content)
+	}
+}
+
+func recordTranscriptEventFromRecorder(ctx context.Context, recorder *sessionrecorder.Recorder, role, content string) {
+	if recorder == nil {
+		return
+	}
+	sessionID, ok := sessionrecorder.SessionIDFromContext(ctx)
+	if !ok {
+		return
+	}
+	recordTranscriptEvent(sessionID, recorder, role, content)
+}
+
+func recordTranscriptEvent(sessionID string, recorder *sessionrecorder.Recorder, role, content string) {
+	if recorder == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+
+	ctx := sessionrecorder.WithSessionID(context.Background(), sessionID)
+	if err := recorder.AppendEvent(ctx, sessionrecorder.Event{
+		Role:    role,
+		Content: content,
+	}); err != nil {
+		slog.Error("wp_graph_record_event_failed",
+			slog.String("session_id", sessionID),
+			slog.String("role", role),
+			slog.String("err", err.Error()),
+		)
+	}
 }

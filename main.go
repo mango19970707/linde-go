@@ -12,6 +12,7 @@ import (
 	appconfig "linde-go-v2/internal/config"
 	"linde-go-v2/internal/graph"
 	"linde-go-v2/internal/httpapi"
+	"linde-go-v2/internal/sessionrecorder"
 	"linde-go-v2/internal/tools"
 
 	"github.com/cloudwego/eino/compose"
@@ -49,16 +50,22 @@ func run() error {
 		return fmt.Errorf("create chat model: %w", err)
 	}
 
+	transcriptRecorder, err := sessionrecorder.NewRecorder("session")
+	if err != nil {
+		return fmt.Errorf("create session recorder: %w", err)
+	}
+	recordedModel := graph.WrapChatModelWithSessionRecorder(model, transcriptRecorder)
+
 	promptStore, err := graph.LoadPromptStore(cfg.StructuredMemoryDB.Driver, cfg.StructuredMemoryDB.DSN)
 	if err != nil {
 		return fmt.Errorf("load prompt store: %w", err)
 	}
 
-	extractor, err := graph.NewLLMWpInfoExtractor(model, promptStore)
+	extractor, err := graph.NewLLMWpInfoExtractor(recordedModel, promptStore)
 	if err != nil {
 		return err
 	}
-	recognizer, err := graph.NewLLMWpTypeRecognizer(model, promptStore)
+	recognizer, err := graph.NewLLMWpTypeRecognizer(recordedModel, promptStore)
 	if err != nil {
 		return err
 	}
@@ -68,18 +75,22 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("create template list tool: %w", err)
 	}
+	templateListTool = graph.WrapToolWithSessionRecorder(templateListTool, transcriptRecorder)
 	templateDetailTool, err := tools.NewQueryWptempletTool(toolConfig)
 	if err != nil {
 		return fmt.Errorf("create template detail tool: %w", err)
 	}
+	templateDetailTool = graph.WrapToolWithSessionRecorder(templateDetailTool, transcriptRecorder)
 	updateTool, err := tools.NewUpdateWpInfoTool(toolConfig)
 	if err != nil {
 		return fmt.Errorf("create update work permit tool: %w", err)
 	}
+	updateTool = graph.WrapToolWithSessionRecorder(updateTool, transcriptRecorder)
 	linkTool, err := tools.NewLinkexistWpinfoTool(toolConfig)
 	if err != nil {
 		return fmt.Errorf("create link work permit tool: %w", err)
 	}
+	linkTool = graph.WrapToolWithSessionRecorder(linkTool, transcriptRecorder)
 
 	checkpointStore := httpapi.NewMemoryCheckPointStore()
 	structuredMemoryStore, err := graph.LoadStructuredMemoryStore(cfg.StructuredMemoryDB.Driver, cfg.StructuredMemoryDB.DSN)
@@ -95,7 +106,7 @@ func run() error {
 		templateListTool,
 		recognizer,
 		templateDetailTool,
-		model,
+		recordedModel,
 		promptStore,
 		structuredMemoryStore,
 		fillRules,
@@ -106,6 +117,7 @@ func run() error {
 			TopN:           cfg.WorkPermitAPI.IntentMemoryTopNOrDefault(),
 		},
 		cfg.WorkPermitAPI.ConfirmWpTypesEnabled(),
+		graph.WithSessionRecorder(transcriptRecorder),
 		compose.WithCheckPointStore(checkpointStore),
 		compose.WithGraphName("work-permit"),
 	)
@@ -113,7 +125,7 @@ func run() error {
 		return fmt.Errorf("build work permit graph: %w", err)
 	}
 
-	server := httpapi.NewWorkPermitServer(runner, promptStore)
+	server := httpapi.NewWorkPermitServer(runner, promptStore, structuredMemoryStore, transcriptRecorder)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "7070"
