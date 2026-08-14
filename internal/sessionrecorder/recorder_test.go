@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -67,6 +68,70 @@ func TestRecorderUpdatesStatusWithoutDroppingTranscript(t *testing.T) {
 	}
 	if got.Transcript[0] != (persistedEvent{Role: "assistant", Content: "need more details"}) {
 		t.Fatalf("transcript[0] = %#v", got.Transcript[0])
+	}
+}
+
+func TestRecorderRejectsUnsafeSessionID(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	recorder, err := NewRecorder(dir)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+
+	ctx := WithSessionID(context.Background(), "../escape")
+	err = recorder.AppendEvent(ctx, Event{
+		Role:    "user",
+		Content: "start permit",
+	})
+	if err == nil {
+		t.Fatal("AppendEvent() error = nil")
+	}
+}
+
+func TestRecorderConcurrentAppendAndStatusDoNotDropEvents(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	recorder, err := NewRecorder(dir)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+
+	const eventCount = 16
+	ctx := WithSessionID(context.Background(), "session-concurrent")
+
+	var wg sync.WaitGroup
+	wg.Add(eventCount + 1)
+
+	for i := range eventCount {
+		go func(index int) {
+			defer wg.Done()
+			if err := recorder.AppendEvent(ctx, Event{
+				Role:    "user",
+				Content: "event",
+			}); err != nil {
+				t.Errorf("AppendEvent(%d) error = %v", index, err)
+			}
+		}(i)
+	}
+
+	go func() {
+		defer wg.Done()
+		if err := recorder.MarkStatus(ctx, "completed"); err != nil {
+			t.Errorf("MarkStatus() error = %v", err)
+		}
+	}()
+
+	wg.Wait()
+
+	got := readSessionRecord(t, dir, "session-concurrent")
+	if got.Status != "completed" {
+		t.Fatalf("status = %q", got.Status)
+	}
+	if len(got.Transcript) != eventCount {
+		t.Fatalf("len(transcript) = %d", len(got.Transcript))
 	}
 }
 

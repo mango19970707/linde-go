@@ -3,13 +3,18 @@ package sessionrecorder
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 )
 
 type fileStore struct {
 	dir string
 }
+
+var safeSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 type sessionRecord struct {
 	SessionID  string     `json:"session_id"`
@@ -26,7 +31,10 @@ func newFileStore(dir string) (*fileStore, error) {
 }
 
 func (s *fileStore) load(sessionID string) (sessionRecord, error) {
-	path := s.pathFor(sessionID)
+	path, err := s.pathFor(sessionID)
+	if err != nil {
+		return sessionRecord{}, err
+	}
 
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -58,12 +66,18 @@ func (s *fileStore) save(record sessionRecord) error {
 		return err
 	}
 
-	path := s.pathFor(record.SessionID)
+	path, err := s.pathFor(record.SessionID)
+	if err != nil {
+		return err
+	}
 	return writeFileAtomic(path, data)
 }
 
-func (s *fileStore) pathFor(sessionID string) string {
-	return filepath.Join(s.dir, sessionID+".json")
+func (s *fileStore) pathFor(sessionID string) (string, error) {
+	if err := validateSessionID(sessionID); err != nil {
+		return "", err
+	}
+	return filepath.Join(s.dir, sessionID+".json"), nil
 }
 
 func writeFileAtomic(path string, data []byte) (err error) {
@@ -90,15 +104,38 @@ func writeFileAtomic(path string, data []byte) (err error) {
 		return err
 	}
 
-	if err = os.Rename(tempPath, path); err == nil {
-		return nil
+	return atomicReplaceFile(tempPath, path)
+}
+
+func validateSessionID(sessionID string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return ErrInvalidSessionID
+	}
+	if !safeSessionIDPattern.MatchString(sessionID) {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionID, sessionID)
+	}
+	if sessionID == "." || sessionID == ".." {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionID, sessionID)
+	}
+	if isReservedWindowsBaseName(sessionID) {
+		return fmt.Errorf("%w: %q", ErrInvalidSessionID, sessionID)
+	}
+	return nil
+}
+
+func isReservedWindowsBaseName(sessionID string) bool {
+	base := strings.ToUpper(sessionID)
+	if dot := strings.IndexByte(base, '.'); dot >= 0 {
+		base = base[:dot]
 	}
 
-	if !errors.Is(err, os.ErrExist) {
-		return err
+	switch base {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		return true
+	default:
+		return false
 	}
-	if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-		return err
-	}
-	return os.Rename(tempPath, path)
 }
