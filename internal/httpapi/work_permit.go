@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/cloudwego/eino/compose"
 	"github.com/gin-gonic/gin"
 	"linde-go-v2/internal/graph"
+	"linde-go-v2/internal/sessionrecorder"
 )
 
 type WorkPermitRunner interface {
@@ -56,6 +58,7 @@ type WorkPermitServer struct {
 	runner      WorkPermitRunner
 	promptStore graph.PromptStore
 	memoryStore graph.StructuredMemoryStore
+	recorder    *sessionrecorder.Recorder
 
 	mu       sync.Mutex
 	sessions map[string]sessionState
@@ -64,22 +67,24 @@ type WorkPermitServer struct {
 func NewWorkPermitServer(runner WorkPermitRunner, args ...any) *WorkPermitServer {
 	var promptStore graph.PromptStore
 	var memoryStore graph.StructuredMemoryStore
+	var recorder *sessionrecorder.Recorder
 
-	switch len(args) {
-	case 1:
-		promptStore, _ = args[0].(graph.PromptStore)
-	case 2:
-		promptStore, _ = args[0].(graph.PromptStore)
-		memoryStore, _ = args[1].(graph.StructuredMemoryStore)
-	case 3:
-		promptStore, _ = args[0].(graph.PromptStore)
-		memoryStore, _ = args[1].(graph.StructuredMemoryStore)
+	for _, arg := range args {
+		switch value := arg.(type) {
+		case graph.PromptStore:
+			promptStore = value
+		case graph.StructuredMemoryStore:
+			memoryStore = value
+		case *sessionrecorder.Recorder:
+			recorder = value
+		}
 	}
 
 	return &WorkPermitServer{
 		runner:      runner,
 		promptStore: promptStore,
 		memoryStore: memoryStore,
+		recorder:    recorder,
 		sessions:    make(map[string]sessionState),
 	}
 }
@@ -208,7 +213,9 @@ func (s *WorkPermitServer) handleInitialRequest(c *gin.Context, request workPerm
 		SiteID:    request.SiteID,
 		UserID:    request.UserID,
 	}
-	output, err := s.runner.Invoke(c.Request.Context(), state, compose.WithCheckPointID(checkpointID))
+	s.recordEvent(sessionID, "http_request", request)
+	ctx := sessionrecorder.WithSessionID(c.Request.Context(), sessionID)
+	output, err := s.runner.Invoke(ctx, state, compose.WithCheckPointID(checkpointID))
 	s.writeRunResult(c, sessionID, checkpointID, output, err)
 }
 
@@ -255,6 +262,11 @@ func (s *WorkPermitServer) handleResumeRequest(c *gin.Context, request workPermi
 	}
 
 	resumeContext := compose.ResumeWithData(c.Request.Context(), session.InterruptID, resumeData)
+	s.recordEvent(request.SessionID, "resume", map[string]any{
+		"operation": session.Operation,
+		"request":   request,
+	})
+	resumeContext = sessionrecorder.WithSessionID(resumeContext, request.SessionID)
 	state := &graph.WpGraphState{
 		SessionID: request.SessionID,
 		UserInput: request.Input,
@@ -292,9 +304,14 @@ func (s *WorkPermitServer) writeRunResult(c *gin.Context, sessionID, checkpointI
 			} else {
 				response.Status = "interrupted"
 			}
+			s.recordEvent(sessionID, "interrupt", response)
+			s.recordEvent(sessionID, "http_response", response)
+			s.markSessionStatus(sessionID, "interrupted")
 			c.JSON(http.StatusOK, response)
 			return
 		}
+		s.recordEvent(sessionID, "error", runErr.Error())
+		s.markSessionStatus(sessionID, "failed")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": runErr.Error()})
 		return
 	}
@@ -305,7 +322,58 @@ func (s *WorkPermitServer) writeRunResult(c *gin.Context, sessionID, checkpointI
 		response.FilledWps = output.FilledWps
 		response.Message = output.ErrorMsg
 	}
+	s.recordEvent(sessionID, "http_response", response)
+	s.markSessionStatus(sessionID, response.Status)
 	c.JSON(http.StatusOK, response)
+}
+
+func (s *WorkPermitServer) recordEvent(sessionID, role string, content any) {
+	if s.recorder == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+
+	event := sessionrecorder.Event{
+		Role:    role,
+		Content: renderRecordedContent(content),
+	}
+	ctx := sessionrecorder.WithSessionID(context.Background(), sessionID)
+	if err := s.recorder.AppendEvent(ctx, event); err != nil {
+		slog.Error("work_permit_record_event_failed",
+			slog.String("session_id", sessionID),
+			slog.String("role", role),
+			slog.String("err", err.Error()),
+		)
+	}
+}
+
+func (s *WorkPermitServer) markSessionStatus(sessionID, status string) {
+	if s.recorder == nil || strings.TrimSpace(sessionID) == "" {
+		return
+	}
+
+	ctx := sessionrecorder.WithSessionID(context.Background(), sessionID)
+	if err := s.recorder.MarkStatus(ctx, status); err != nil {
+		slog.Error("work_permit_record_status_failed",
+			slog.String("session_id", sessionID),
+			slog.String("status", status),
+			slog.String("err", err.Error()),
+		)
+	}
+}
+
+func renderRecordedContent(content any) string {
+	switch value := content.(type) {
+	case nil:
+		return ""
+	case string:
+		return value
+	default:
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return fmt.Sprintf("%v", value)
+		}
+		return string(raw)
+	}
 }
 
 func interruptDetails(info any) (operation string, missingFields []string, question string, filledWps []graph.FilledWp, intentWpTypes []graph.WpMetaInfo) {

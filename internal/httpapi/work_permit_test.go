@@ -6,11 +6,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/cloudwego/eino/compose"
 	"linde-go-v2/internal/graph"
+	"linde-go-v2/internal/sessionrecorder"
 )
 
 type recordingRunner struct {
@@ -201,6 +204,88 @@ func TestWorkPermitHandlerResumesApprovalWithFullPayloads(t *testing.T) {
 	}
 	if callCount != 2 {
 		t.Fatalf("callCount = %d", callCount)
+	}
+}
+
+func TestWorkPermitHandlerWritesInterruptedTranscriptJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runner := &recordingRunner{}
+	interruptErr := newInterruptError(t, map[string]any{
+		"operation":      "collect_wp_info",
+		"missing_fields": []string{"start_time"},
+		"question":       "please provide start time",
+	})
+	runner.call = func(ctx context.Context, input *graph.WpGraphState, opts ...compose.Option) (*graph.WpGraphState, error) {
+		return nil, interruptErr
+	}
+
+	recorder, err := sessionrecorder.NewRecorder(dir)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+
+	server := NewWorkPermitServer(runner, nil, nil, recorder)
+	rec := postJSON(server, `{"input":"initial work description","site_id":28,"user_id":464}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	response := decodeResponse(t, rec)
+	transcript := loadWorkPermitTranscript(t, filepath.Join(dir, response.SessionID+".json"))
+	if transcript.Status != "interrupted" {
+		t.Fatalf("status = %q", transcript.Status)
+	}
+	if !containsWorkPermitEventType(transcript.Transcript, "http_request") {
+		t.Fatalf("events = %#v", transcript.Transcript)
+	}
+	if !containsWorkPermitEventType(transcript.Transcript, "interrupt") {
+		t.Fatalf("events = %#v", transcript.Transcript)
+	}
+}
+
+func TestWorkPermitHandlerUpdatesTranscriptAcrossResume(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runner := &recordingRunner{}
+	interruptErr := newInterruptError(t, map[string]any{
+		"operation":      "collect_wp_info",
+		"missing_fields": []string{"start_time"},
+		"question":       "please provide start time",
+	})
+	callCount := 0
+	runner.call = func(ctx context.Context, input *graph.WpGraphState, opts ...compose.Option) (*graph.WpGraphState, error) {
+		callCount++
+		if callCount == 1 {
+			return nil, interruptErr
+		}
+		return &graph.WpGraphState{SessionID: input.SessionID}, nil
+	}
+
+	recorder, err := sessionrecorder.NewRecorder(dir)
+	if err != nil {
+		t.Fatalf("NewRecorder() error = %v", err)
+	}
+
+	server := NewWorkPermitServer(runner, nil, nil, recorder)
+	first := postJSON(server, `{"input":"initial work description","site_id":28,"user_id":464}`)
+	sessionID := decodeResponse(t, first).SessionID
+	second := postJSON(server, `{"session_id":"`+sessionID+`","input":"start at 08:00","site_id":28,"user_id":464}`)
+	if second.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", second.Code, second.Body.String())
+	}
+
+	transcript := loadWorkPermitTranscript(t, filepath.Join(dir, sessionID+".json"))
+	if transcript.Status != "completed" {
+		t.Fatalf("status = %q", transcript.Status)
+	}
+	if !containsWorkPermitEventType(transcript.Transcript, "resume") {
+		t.Fatalf("events = %#v", transcript.Transcript)
+	}
+	if !containsWorkPermitEventType(transcript.Transcript, "http_response") {
+		t.Fatalf("events = %#v", transcript.Transcript)
 	}
 }
 
@@ -400,6 +485,40 @@ func decodeResponse(t *testing.T, rec *httptest.ResponseRecorder) workPermitResp
 		t.Fatalf("decode response: %v", err)
 	}
 	return response
+}
+
+type persistedWorkPermitTranscript struct {
+	SessionID  string                               `json:"session_id"`
+	Status     string                               `json:"status"`
+	Transcript []persistedWorkPermitTranscriptEvent `json:"transcript"`
+}
+
+type persistedWorkPermitTranscriptEvent struct {
+	Role string `json:"role"`
+}
+
+func loadWorkPermitTranscript(t *testing.T, path string) persistedWorkPermitTranscript {
+	t.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q) error = %v", path, err)
+	}
+
+	var transcript persistedWorkPermitTranscript
+	if err := json.Unmarshal(data, &transcript); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", path, err)
+	}
+	return transcript
+}
+
+func containsWorkPermitEventType(events []persistedWorkPermitTranscriptEvent, want string) bool {
+	for _, event := range events {
+		if event.Role == want {
+			return true
+		}
+	}
+	return false
 }
 
 type inMemoryCheckPointStore struct {

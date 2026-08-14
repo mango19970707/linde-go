@@ -12,6 +12,7 @@ import (
 	appconfig "linde-go-v2/internal/config"
 	"linde-go-v2/internal/graph"
 	"linde-go-v2/internal/httpapi"
+	"linde-go-v2/internal/sessionrecorder"
 	"linde-go-v2/internal/tools"
 
 	"github.com/cloudwego/eino/compose"
@@ -113,7 +114,12 @@ func run() error {
 		return fmt.Errorf("build work permit graph: %w", err)
 	}
 
-	server := httpapi.NewWorkPermitServer(runner, promptStore)
+	transcriptRecorder, err := sessionrecorder.NewRecorder("session")
+	if err != nil {
+		return fmt.Errorf("create session recorder: %w", err)
+	}
+
+	server := httpapi.NewWorkPermitServer(runner, promptStore, structuredMemoryStore, transcriptRecorder)
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "7070"
