@@ -185,14 +185,28 @@ func fillSingleWp(ctx context.Context, state *WpGraphState, template WpTemplate,
 
 	// step 5：如果仍存在必填空字段，则先按作业票类型查询历史，再按作业内容描述挑选最匹配样本回填；匹配不到则不填。
 	requiredPaths := collectMissingRequiredPaths(fieldsByPath, filledPathSet)
+	var historyEntries []StructuredMemoryEntry
 	if len(requiredPaths) > 0 {
-		historyEntries, err := memoryStore.FindByType(ctx, template.WpTypeID)
+		var err error
+		historyEntries, err = memoryStore.FindByType(ctx, template.WpTypeID)
 		if err != nil {
 			return FilledWp{}, fmt.Errorf("find structured memory history for template %d: %w", template.ID, err)
 		}
 		bestSample := selectBestStructuredMemorySample(buildStructuredMemorySamples(historyEntries), state.Description, "")
 		if bestSample != nil {
 			applyResolvedValues(fieldsByPath, bestSample.Fields, llmFallbackSource, &filledFields, filledPathSet)
+		}
+	}
+
+	requiredPaths = collectMissingRequiredPaths(fieldsByPath, filledPathSet)
+	if len(requiredPaths) > 0 {
+		llmValues, err := helper.fillFields(ctx, template, state, fieldsByPath, requiredPaths, buildStructuredMemorySamples(historyEntries))
+		if err != nil {
+			if !isRecoverableLLMEnrichmentError(ctx, err) {
+				return FilledWp{}, fmt.Errorf("fill remaining required fields for template %d: %w", template.ID, err)
+			}
+		} else {
+			applyResolvedValues(fieldsByPath, llmValues, llmFallbackSource, &filledFields, filledPathSet)
 		}
 	}
 
@@ -522,11 +536,12 @@ func (h wpFillLLMHelper) fillFields(ctx context.Context, template WpTemplate, st
 	for _, path := range requiredPaths {
 		field := fieldsByPath[path]
 		requiredFields = append(requiredFields, map[string]any{
-			"path":     path,
-			"name":     field.Name,
-			"label":    field.DisplayLabel,
-			"type":     field.Type,
-			"required": field.Required,
+			"path":        path,
+			"name":        field.Name,
+			"label":       field.DisplayLabel,
+			"type":        field.Type,
+			"required":    field.Required,
+			"value_shape": suggestedFieldValueShape(field.Type),
 		})
 	}
 
@@ -573,6 +588,7 @@ func applyResolvedValues(fieldsByPath map[string]*fillCandidateField, values map
 		if !ok || !field.AllowFill {
 			continue
 		}
+		value = normalizeResolvedFieldValue(field.Type, value)
 		if !isEmptyFieldValue(field.Field["value"]) {
 			continue
 		}
@@ -586,6 +602,32 @@ func applyResolvedValues(fieldsByPath map[string]*fillCandidateField, values map
 			Source: source,
 		})
 		filledPathSet[path] = struct{}{}
+	}
+}
+
+func normalizeResolvedFieldValue(fieldType string, value any) any {
+	switch strings.TrimSpace(fieldType) {
+	case "selector", "checkbox", "radio":
+		switch typed := value.(type) {
+		case map[string]any:
+			return []any{typed}
+		case []map[string]any:
+			normalized := make([]any, 0, len(typed))
+			for _, item := range typed {
+				normalized = append(normalized, item)
+			}
+			return normalized
+		}
+	}
+	return value
+}
+
+func suggestedFieldValueShape(fieldType string) string {
+	switch strings.TrimSpace(fieldType) {
+	case "selector", "checkbox", "radio":
+		return "array"
+	default:
+		return "scalar"
 	}
 }
 

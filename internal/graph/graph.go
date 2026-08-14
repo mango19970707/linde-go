@@ -343,6 +343,15 @@ func newIntentRecognitionNode(templateTool einotool.InvokableTool, memoryStore S
 			}
 		}
 
+		if state == nil {
+			if wasInterrupted, hasState, interruptedState := compose.GetInterruptState[*WpGraphState](ctx); wasInterrupted && hasState {
+				state = interruptedState
+			}
+		}
+		if state == nil {
+			return nil, fmt.Errorf("work permit graph state is nil")
+		}
+
 		raw, err := templateTool.InvokableRun(ctx, fmt.Sprintf(`{"siteid":%d}`, state.SiteID))
 		if err != nil {
 			return nil, fmt.Errorf("query work permit templates: %w", err)
@@ -351,15 +360,6 @@ func newIntentRecognitionNode(templateTool einotool.InvokableTool, memoryStore S
 		templates, err := decodeWpMetaInfoResponse(raw)
 		if err != nil {
 			return nil, fmt.Errorf("decode work permit templates: %w", err)
-		}
-
-		if state == nil {
-			if wasInterrupted, hasState, interruptedState := compose.GetInterruptState[*WpGraphState](ctx); wasInterrupted && hasState {
-				state = interruptedState
-			}
-		}
-		if state == nil {
-			return nil, fmt.Errorf("work permit graph state is nil")
 		}
 
 		intentCandidates, err := findIntentMemoryCandidates(ctx, memoryStore, state.SiteID, state.Area, state.Description, templates, retrievalConfig)

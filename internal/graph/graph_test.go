@@ -536,6 +536,91 @@ func TestIntentRecognitionNodeInterruptsForWpTypeConfirmation(t *testing.T) {
 	}
 }
 
+func TestIntentRecognitionNodeResumesWpTypeConfirmationWithCheckpointState(t *testing.T) {
+	t.Parallel()
+
+	templatesRaw, err := json.Marshal(map[string]any{
+		"success": true,
+		"data": []WpMetaInfo{
+			{Id: 243, TemplateName: "permit", WpTypeName: "PTW800", WpTypeId: 23},
+		},
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	node := newIntentRecognitionNode(
+		stubWpTemplateTool{result: string(templatesRaw)},
+		stubStructuredMemoryStore{},
+		stubWpTypeRecognizer{ids: []int{23}},
+	)
+
+	g := compose.NewGraph[*WpGraphState, *WpGraphState]()
+	lambda := compose.InvokableLambda(func(ctx context.Context, state *WpGraphState) (*WpGraphState, error) {
+		if wasInterrupted, _, _ := compose.GetInterruptState[*WpGraphState](ctx); !wasInterrupted {
+			return nil, compose.StatefulInterrupt(ctx, map[string]any{"operation": operationConfirmWpTypes}, &WpGraphState{
+				SiteID:      28,
+				Description: "hot work",
+			})
+		}
+		return node(ctx, nil)
+	})
+	if err := g.AddLambdaNode(nodeIntentRecognition, lambda); err != nil {
+		t.Fatalf("AddLambdaNode() error = %v", err)
+	}
+	if err := g.AddEdge(compose.START, nodeIntentRecognition); err != nil {
+		t.Fatalf("AddEdge(start) error = %v", err)
+	}
+	if err := g.AddEdge(nodeIntentRecognition, compose.END); err != nil {
+		t.Fatalf("AddEdge(end) error = %v", err)
+	}
+
+	runnable, err := g.Compile(context.Background(),
+		compose.WithCheckPointStore(newInMemoryCheckPointStore()),
+		compose.WithGraphName("intent-recognition"),
+	)
+	if err != nil {
+		t.Fatalf("Compile() error = %v", err)
+	}
+
+	checkPointID := "cp-intent-confirm"
+	_, err = runnable.Invoke(context.Background(), &WpGraphState{
+		SiteID:      1,
+		Description: "ignored",
+	}, compose.WithCheckPointID(checkPointID))
+	if err == nil {
+		t.Fatal("first Invoke() error = nil")
+	}
+
+	firstInterrupt, ok := compose.ExtractInterruptInfo(err)
+	if !ok || len(firstInterrupt.InterruptContexts) != 1 {
+		t.Fatalf("first error is not single interrupt: %v", err)
+	}
+	if firstInterrupt.InterruptContexts[0].Info.(map[string]any)["operation"] != operationConfirmWpTypes {
+		t.Fatalf("first operation = %#v", firstInterrupt.InterruptContexts[0].Info)
+	}
+
+	resumeCtx := compose.ResumeWithData(context.Background(), firstInterrupt.InterruptContexts[0].ID, WpTypeConfirmation{
+		Confirmed: true,
+		IntentWpTypes: []WpMetaInfo{
+			{Id: 243, TemplateName: "permit", WpTypeName: "PTW800", WpTypeId: 23},
+		},
+	})
+	got, err := runnable.Invoke(resumeCtx, nil, compose.WithCheckPointID(checkPointID))
+	if err != nil {
+		t.Fatalf("second Invoke() error = %v", err)
+	}
+	if got == nil {
+		t.Fatal("second Invoke() output = nil")
+	}
+	if got.CurrentNode != nodeIntentRecognition {
+		t.Fatalf("CurrentNode = %q", got.CurrentNode)
+	}
+	if len(got.IntentWpTypes) != 1 || got.IntentWpTypes[0].Id != 243 {
+		t.Fatalf("IntentWpTypes = %#v", got.IntentWpTypes)
+	}
+}
+
 func TestValidateWpTypeConfirmationAppliesEditedWpTypes(t *testing.T) {
 	t.Parallel()
 

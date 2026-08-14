@@ -30,6 +30,63 @@ func (s *queueChatModel) Stream(ctx context.Context, input []*schema.Message, op
 	return nil, errors.New("not implemented")
 }
 
+func TestFillWpsNodeUsesLLMFallbackForRequiredSelectorFields(t *testing.T) {
+	t.Parallel()
+
+	node := newFillWpsNode(&queueChatModel{
+		responses: []*schema.Message{
+			schema.AssistantMessage(`{"fields":{"sqxx.0.value":[{"id":501,"name":"李文涛"}]}}`, nil),
+		},
+	}, stubPromptStore{
+		prompts: map[string]PromptDefinition{
+			PromptKeyWpFillFieldCompletion: {Key: PromptKeyWpFillFieldCompletion, Content: "fill prompt"},
+		},
+	}, stubStructuredMemoryStore{}, WpFillRules{})
+
+	state := &WpGraphState{
+		Area:        "空分装置",
+		Description: "动火检修",
+		WpTemplates: []WpTemplate{{
+			ID:       243,
+			WpTypeID: 23,
+			Name:     "作业许可证",
+			ApplyContentObject: map[string]any{
+				"sqxx": []any{
+					map[string]any{
+						"name":     "qfr",
+						"label":    "许可证签发人",
+						"type":     "selector",
+						"value":    []any{},
+						"required": true,
+					},
+				},
+			},
+		}},
+	}
+
+	got, err := node(context.Background(), state)
+	if err != nil {
+		t.Fatalf("newFillWpsNode() error = %v", err)
+	}
+
+	value := got.FilledWps[0].Content.(map[string]any)["sqxx"].([]any)[0].(map[string]any)["value"]
+	items, ok := value.([]any)
+	if !ok || len(items) != 1 {
+		t.Fatalf("sqxx.0.value = %#v", value)
+	}
+
+	item, ok := items[0].(map[string]any)
+	if !ok {
+		t.Fatalf("sqxx.0.value[0] type = %T", items[0])
+	}
+	if item["name"] != "李文涛" {
+		t.Fatalf("sqxx.0.value[0] = %#v", item)
+	}
+	if len(got.FilledWps[0].UnfilledFields) != 0 {
+		t.Fatalf("UnfilledFields = %#v", got.FilledWps[0].UnfilledFields)
+	}
+}
+
 func TestFillWpsNodeTraversesGrfhFields(t *testing.T) {
 	t.Parallel()
 
