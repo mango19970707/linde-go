@@ -65,15 +65,20 @@ func TestRecorderUpdatesStatusWithoutDroppingTranscript(t *testing.T) {
 	if len(got.Transcript) != 1 {
 		t.Fatalf("transcript = %#v", got.Transcript)
 	}
-	if got.Transcript[0].Content != "need more details" {
+	if got.Transcript[0] != (persistedEvent{Role: "assistant", Content: "need more details"}) {
 		t.Fatalf("transcript[0] = %#v", got.Transcript[0])
 	}
 }
 
 type persistedSessionRecord struct {
-	SessionID  string  `json:"session_id"`
-	Status     string  `json:"status"`
-	Transcript []Event `json:"transcript"`
+	SessionID  string           `json:"session_id"`
+	Status     string           `json:"status"`
+	Transcript []persistedEvent `json:"transcript"`
+}
+
+type persistedEvent struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 func readSessionRecord(t *testing.T, dir, sessionID string) persistedSessionRecord {
